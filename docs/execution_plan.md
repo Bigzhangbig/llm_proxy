@@ -500,7 +500,7 @@ curl -N localhost:3000/v1/responses \
 ### E2E-8：MiMo 推理 + 搜索
 ```bash
 curl -N localhost:3000/v1/responses \
-  -d '{"model":"MiMo-V2.5-Pro","input":"最新AI论文","stream":true,"tools":[{"type":"web_search"}]}'
+  -d '{"model":"mimo-v2.5-pro","input":"最新AI论文","stream":true,"tools":[{"type":"web_search"}]}'
 # 验证：reasoning + web_search 工具服务端执行
 ```
 

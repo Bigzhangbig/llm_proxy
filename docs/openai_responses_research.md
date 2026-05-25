@@ -20,7 +20,7 @@
 
 ## 二、 四家供应商推理字段 (CoT) 与流式输出格式详析
 
-1. **DeepSeek (V4 系列，`deepseek-v4-pro` / `deepseek-v4-flash`，thinking mode)** *(注：V4 为项目规划命名，对应 DeepSeek 后续推理模型代际)*
+1. **DeepSeek (V4 系列，`deepseek-v4-pro` / `deepseek-v4-flash`，thinking mode)**
    - **参数配置**：通过 thinking mode 开启推理，支持 tool calling。
    - **流式输出**：流式返回的 SSE 数据块中，在 `choices[0].delta` 下包含独有的 `reasoning_content` 字段（格式为 plain string 增量）。
    - **时序特征**：生成时分阶段进行：先输出 `reasoning_content` 增量，此时 `content` 为空或 null；思维链结束后，`reasoning_content` 停止输出，正式的回答 `content` 开始流式吐出。
