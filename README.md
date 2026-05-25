@@ -111,6 +111,18 @@ llm_proxy/
     └── .gitkeep
 ```
 
+## 路线图
+
+- [x] **Phase 0** — 项目脚手架（Hono + bun:sqlite + 项目结构）
+- [ ] **Phase 1** — DeepSeek V4 完整支持（代理转发 + reasoning 状态机 + Schema 降级 + 并发锁）
+- [ ] **Phase 2** — Web 搜索支持（Exa 语义搜索 / mmx / Gemini Grounding 三后端 + 搜索路由）
+- [ ] **Phase 3** — Web Fetch 支持（curl 下载 + MinerU 提取 + 小模型精炼管道）
+- [ ] **Phase 4** — 多模态支持（图像理解 + 小模型降级 + mmx 命令）
+- [ ] **Phase 5** — 工具调用支持（tool_calls 拦截 + 虚拟工具代执行 + 原生工具回弹 + Agentic Loop）
+- [ ] **Phase 6** — 其他供应商适配（Kimi k2.6 / MiniMax M2.7 / MiMo V2.5-Pro）
+
+详细执行计划与验收方案见 [docs/execution_plan.md](docs/execution_plan.md)。
+
 ## 许可证
 
 MIT
