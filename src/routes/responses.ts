@@ -10,7 +10,7 @@ import { parseSSELines } from '../core/stream'
 import { search } from '../search/router'
 import type { ResponsesRequest, ResponsesResponse } from '../types'
 
-const MAX_AGENTIC_ROUNDS = 3
+const MAX_AGENTIC_ROUNDS = Number(Bun.env.MAX_AGENTIC_ROUNDS || '3')
 
 async function agenticLoop(
   messages: Array<Record<string, unknown>>,
