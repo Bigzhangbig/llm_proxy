@@ -10,11 +10,6 @@ export const config = {
   exa: {
     apiKey: Bun.env.EXA_API_KEY || '',
   },
-  mmx: {
-    apiKey: Bun.env.MMX_API_KEY || '',
-    region: Bun.env.MMX_REGION || 'cn',
-    baseUrl: Bun.env.MMX_BASE_URL || '',
-  },
   gemini: {
     apiKey: Bun.env.GEMINI_API_KEY || '',
     model: Bun.env.GEMINI_MODEL || 'gemini-2.5-flash',

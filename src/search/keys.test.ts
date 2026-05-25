@@ -48,15 +48,18 @@ describe('keys', () => {
   })
 
   describe('loadMmxConfig', () => {
-    it('returns config from env vars', () => {
+    it('returns config from env vars when config file absent', () => {
       const savedKey = process.env.MMX_API_KEY
       const savedRegion = process.env.MMX_REGION
+      const savedHome = process.env.HOME
+      process.env.HOME = '/nonexistent'
       process.env.MMX_API_KEY = 'test-key'
       process.env.MMX_REGION = 'sg'
       const { loadMmxConfig } = require('../search/keys')
       const config = loadMmxConfig()
       expect(config.apiKey).toBe('test-key')
       expect(config.baseUrl).toContain('minimax.io')
+      process.env.HOME = savedHome
       if (savedKey !== undefined) process.env.MMX_API_KEY = savedKey; else delete process.env.MMX_API_KEY
       if (savedRegion !== undefined) process.env.MMX_REGION = savedRegion; else delete process.env.MMX_REGION
     })
@@ -64,11 +67,14 @@ describe('keys', () => {
     it('defaults to cn region', () => {
       const savedKey = process.env.MMX_API_KEY
       const savedRegion = process.env.MMX_REGION
+      const savedHome = process.env.HOME
+      process.env.HOME = '/nonexistent'
       delete process.env.MMX_API_KEY
       delete process.env.MMX_REGION
       const { loadMmxConfig } = require('../search/keys')
       const config = loadMmxConfig()
       expect(config.baseUrl).toContain('minimaxi.com')
+      process.env.HOME = savedHome
       if (savedKey !== undefined) process.env.MMX_API_KEY = savedKey
       if (savedRegion !== undefined) process.env.MMX_REGION = savedRegion
     })

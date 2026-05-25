@@ -1,11 +1,9 @@
-import { config } from '../config'
+import { config, type SearchProvider } from '../config'
 import { exaSearch, type SearchResult } from './exa'
 import { mmxSearch } from './mmx'
 import { geminiSearch } from './gemini'
 
 export type { SearchResult }
-
-export type SearchProvider = 'exa' | 'mmx' | 'gemini'
 
 export async function search(query: string, provider?: SearchProvider): Promise<SearchResult[]> {
   const p = provider || config.search.defaultProvider || 'exa'
@@ -28,6 +26,9 @@ export async function search(query: string, provider?: SearchProvider): Promise<
     // Fallback to other providers
     if (p !== 'exa') {
       try { return await exaSearch(query, config.search.maxResults) } catch { /* ignore */ }
+    }
+    if (p !== 'mmx') {
+      try { return await mmxSearch(query) } catch { /* ignore */ }
     }
     if (p !== 'gemini') {
       try {
