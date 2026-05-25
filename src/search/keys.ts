@@ -28,6 +28,11 @@ export function loadMmxConfig(): { apiKey: string; baseUrl: string } {
 
 export function loadGeminiKeys(): string[] {
   const keys: string[] = []
+  // Fallback single key first
+  if (Bun.env.GEMINI_API_KEY) {
+    keys.push(Bun.env.GEMINI_API_KEY)
+  }
+  // Multi-key pool
   for (let i = 1; i <= 10; i++) {
     const key = Bun.env[`GOOGLE_API_KEY_${i}`]
     if (key) keys.push(key)

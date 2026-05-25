@@ -10,10 +10,6 @@ export const config = {
   exa: {
     apiKey: Bun.env.EXA_API_KEY || '',
   },
-  gemini: {
-    apiKey: Bun.env.GEMINI_API_KEY || '',
-    model: Bun.env.GEMINI_MODEL || 'gemini-2.5-flash',
-  },
   search: {
     defaultProvider: (Bun.env.SEARCH_PROVIDER as SearchProvider) || 'exa' as SearchProvider,
     maxResults: Number(Bun.env.SEARCH_MAX_RESULTS || '5'),

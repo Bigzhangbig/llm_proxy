@@ -78,9 +78,12 @@ llm_proxy/
    CLOUDFLARE_ACCOUNT_ID=
    CLOUDFLARE_GATEWAY_ID=
 
-   # Google AI Studio (多密钥轮询，支持 GOOGLE_API_KEY_1 到 GOOGLE_API_KEY_10)
+   # Google AI Studio (Gemini search grounding)
+   # Multi-key pool: GOOGLE_API_KEY_1 to GOOGLE_API_KEY_10
+   # Single key fallback: GEMINI_API_KEY
    GOOGLE_API_KEY_1=
    GOOGLE_API_KEY_2=
+   GEMINI_API_KEY=
 
    # DeepSeek
    DEEPSEEK_API_KEY=
@@ -93,6 +96,7 @@ llm_proxy/
    # MiniMax Search
    MMX_API_KEY=
    MMX_REGION=cn
+   # MMX_BASE_URL=https://api.minimaxi.com  # optional override
 
    # Kimi (Moonshot)
    KIMI_API_KEY=
@@ -102,10 +106,7 @@ llm_proxy/
    # MiMo (Xiaomi)
    MIMO_API_KEY=
    MIMO_BASE_URL=https://token-plan-cn.xiaomimimo.com/v1
-   MIMO_MODEL=MiMo-V2.5-Pro
-
-   # Tavily Search
-   TAVILY_API_KEY=
+   MIMO_MODEL=mimo-v2.5-pro
 
    # Search Provider (exa|mmx|gemini)
    SEARCH_PROVIDER=exa
@@ -221,7 +222,7 @@ llm_proxy/
 #### 2.3 Google Gemini Grounding 搜索
 3. `src/search/gemini.ts`：
    - 多密钥轮询：从环境变量 `GOOGLE_API_KEY_1` 到 `GOOGLE_API_KEY_10` 加载所有可用密钥
-   - 模型 fallback：`gemini-2.5-flash` → `gemini-2.5-flash-lite` → `gemma-4-26b-a4b-it` → `gemma-4-31b-it`
+   - 模型 fallback：`gemini-3.1-flash-lite` → `gemini-2.5-flash-lite` → `gemma-4-26b-a4b` → `gemma-4-31b`
    - 429 错误自动切换密钥和模型，10s 冷却期
    - 调用 Gemini API + `google_search` 工具
    - 解析 `groundingMetadata`：
@@ -290,7 +291,7 @@ llm_proxy/
 #### 3.3 小模型精炼
 3. `src/fetch/refiner.ts`：
    - `refinePageContent(query, rawMarkdown, config): Promise<RefinedContext>`
-   - 使用配置的轻量模型（默认 `deepseek-v4-flash`，可配 `mimo-v2-flash`）
+   - 使用配置的轻量模型（默认 `gemini-3.1-flash-lite`，可配 `gemma-4-26b-a4b`）
    - Prompt：提取与 query 相关的核心事实/数据，输出 Markdown 列表
    - 不相关则返回 `[无相关干货]`
    - `temperature: 0.1`，截取前 30k 字符
@@ -414,6 +415,7 @@ llm_proxy/
 #### 6.3 MiMo V2.5-Pro
 3. `src/providers/mimo.ts`：
    - Base URL: `token-plan-cn.xiaomimimo.com/v1`
+   - 模型名：`mimo-v2.5-pro`
    - 自动注入 `thinking: {"type": "enabled"}`
    - reasoning_content 处理复用
    - `web_search` 工具注入（MiMo 服务端执行，阶段 5 已支持）
@@ -525,6 +527,7 @@ curl -s localhost:3000/v1/responses \
 | 特性 | DeepSeek V4 | Kimi k2.6 | MiniMax M2.7 | MiMo V2.5-Pro |
 |---|---|---|---|---|
 | Base URL | `api.deepseek.com/v1` | `api.kimi.com/coding/v1` | `api.minimax.io/v1` | `token-plan-cn.xiaomimimo.com/v1` |
+| 模型名 | `deepseek-v4-pro` | `kimi-k2.6` | `MiniMax-M2.7` | `mimo-v2.5-pro` |
 | 推理字段 | `reasoning_content` (string) | `reasoning_content` (string) | `reasoning_details` (array) | `reasoning_content` (string) |
 | 推理开启 | thinking mode | 默认开启 | `reasoning_split: true` | `thinking.type: "enabled"` |
 | 多轮回传 | 必须带回 reasoning_content | 必须带回 + `thinking.keep: "all"` | 必须带回 reasoning_details | 必须带回 reasoning_content |

@@ -11,7 +11,7 @@
 | **基础参数兼容性** | 支持 `model`, `messages`, `temperature`, `stream` 等 | 高度兼容 (支持 `max_completion_tokens`) | 高度兼容 | 高度兼容 | 高度兼容 |
 | **流式返回格式 (SSE)** | `choices[0].delta` 结构化增量输出 | 完全兼容 | 完全兼容 | 完全兼容 | 完全兼容 |
 | **stream_options** | 支持 `include_usage` 在最后一个 chunk 返回 token 统计 | 支持 | 支持 | 支持 | 支持 |
-| **Tool Calling** | 标准 `tools` / `tool_choice` 格式 | 支持 (仅限 V3，推理模型 R1 不支持) | 支持 | 支持 | 支持 |
+| **Tool Calling** | 标准 `tools` / `tool_choice` 格式 | 支持 (V3 及 R1 均支持) | 支持 | 支持 | 支持 |
 | **JSON Schema** | `response_format` 指定结构化输出格式 | 支持 `json_schema` 和 `json_object` | 支持 `json_schema` 和 `json_object` | 支持 | 支持 |
 | **深度推理 (CoT) 字段** | 无官方原生流式推理字段 (o1/o3 隐式推理无流式 CoT) | 支持 `reasoning_content` (纯文本增量) | 支持 `reasoning_content` (纯文本增量) | 支持 `reasoning_details` (结构化数组增量) | 支持 `reasoning_content` (纯文本增量) |
 | **内置联网搜索** | 无内置搜索参数 (需外部工具集成) | 不支持内置 (需自定义 Tool 实现) | 支持内置 `$web_search` (自执行回弹机制) | 不支持直接内置 completions 级搜索 (需 MCP/独立 API) | 支持内置 `web_search` 工具 (控制台激活 + 强搜控制) |
@@ -20,7 +20,7 @@
 
 ## 二、 四家供应商推理字段 (CoT) 与流式输出格式详析
 
-1. **DeepSeek (V4 系列，`deepseek-v4-pro` / `deepseek-v4-flash`，thinking mode)**
+1. **DeepSeek (V4 系列，`deepseek-v4-pro` / `deepseek-v4-flash`，thinking mode)** *(注：V4 为项目规划命名，对应 DeepSeek 后续推理模型代际)*
    - **参数配置**：通过 thinking mode 开启推理，支持 tool calling。
    - **流式输出**：流式返回的 SSE 数据块中，在 `choices[0].delta` 下包含独有的 `reasoning_content` 字段（格式为 plain string 增量）。
    - **时序特征**：生成时分阶段进行：先输出 `reasoning_content` 增量，此时 `content` 为空或 null；思维链结束后，`reasoning_content` 停止输出，正式的回答 `content` 开始流式吐出。
