@@ -194,7 +194,7 @@
 | :--- | :--- | :--- |
 | **Kimi** | `kimi-k2.6`（默认）, `kimi-k2.5`, `kimi-k2` | `kimi-k2.6`, `kimi-k2.5`, `kimi-k2 (0905)`, `moonshot-v1-8k/32k/128k` |
 | **MiniMax** | M2.7, M2.7-highspeed | M2.7, M2.7-highspeed, M2.5, M2.5-highspeed, M2.1, M2.1-highspeed, M2, M2-her 等全量 |
-| **MiMo** | MiMo-V2.5-Pro (2x credits), MiMo-V2.5, V2 系列 | 同 Token Plan（无模型独占差异） |
+| **MiMo** | `mimo-v2.5-pro` (2x credits), `mimo-v2.5`, V2 系列 | 同 Token Plan（无模型独占差异） |
 
 ### 6.3 计费与限流差异
 
