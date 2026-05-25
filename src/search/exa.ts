@@ -1,4 +1,4 @@
-import { config } from '../config'
+import { loadExaKey } from './keys'
 
 export interface SearchResult {
   title: string
@@ -8,13 +8,14 @@ export interface SearchResult {
 }
 
 export async function exaSearch(query: string, numResults = 5): Promise<SearchResult[]> {
-  if (!config.exa.apiKey) throw new Error('EXA_API_KEY not configured')
+  const apiKey = loadExaKey()
+  if (!apiKey) throw new Error('EXA_API_KEY not configured')
 
   const resp = await fetch('https://api.exa.ai/search', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': config.exa.apiKey,
+      'x-api-key': apiKey,
     },
     body: JSON.stringify({
       query,

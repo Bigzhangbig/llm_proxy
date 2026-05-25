@@ -1,28 +1,67 @@
-import { config } from '../config'
+import { loadMmxConfig } from './keys'
 import type { SearchResult } from './exa'
 
-export async function mmxSearch(query: string): Promise<SearchResult[]> {
-  if (!config.mmx.apiKey) throw new Error('MMX_API_KEY not configured')
+interface MmxChatResponse {
+  choices?: Array<{
+    message?: {
+      content?: string
+    }
+  }>
+}
 
-  const baseUrl = config.mmx.baseUrl
-  const resp = await fetch(`${baseUrl}/v1/web_search`, {
+export async function mmxSearch(query: string): Promise<SearchResult[]> {
+  const { apiKey, baseUrl } = loadMmxConfig()
+
+  if (!apiKey) {
+    throw new Error('mmx API key not found in ~/.mmx/config.json or environment')
+  }
+
+  // mmx web search uses chat completions with web_search tool
+  const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${config.mmx.apiKey}`,
+      'Authorization': `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({
+      model: 'MiniMax-M2.7',
+      messages: [{ role: 'user', content: query }],
+      tools: [{ type: 'web_search' }],
+      stream: false,
+    }),
   })
 
-  if (!resp.ok) throw new Error(`mmx search error: ${resp.status}`)
+  if (!resp.ok) {
+    const errText = await resp.text()
+    throw new Error(`mmx API error: ${resp.status} - ${errText}`)
+  }
 
-  const data = await resp.json() as Record<string, unknown>
-  // mmx returns results in different format, normalize
-  const dataObj = data.data as Record<string, unknown> | undefined
-  const results = ((data.results || dataObj?.results) || []) as Record<string, unknown>[]
-  return results.map((r) => ({
-    title: (r.title as string) || (r.name as string) || '',
-    url: (r.url as string) || (r.link as string) || '',
-    content: (r.content as string) || (r.snippet as string) || '',
-  }))
+  const data = await resp.json() as MmxChatResponse
+  const message = data.choices?.[0]?.message?.content || ''
+
+  // Parse search results from the response
+  const results: SearchResult[] = []
+
+  // Try to extract URLs from the response
+  const urlRegex = /https?:\/\/[^\s)]+/g
+  const urls = message.match(urlRegex) || []
+
+  for (const url of urls) {
+    results.push({
+      title: '',
+      url,
+      content: '',
+    })
+  }
+
+  // If no URLs found, return the message as a single result
+  if (results.length === 0 && message) {
+    results.push({
+      title: 'mmx search result',
+      url: '',
+      content: message,
+    })
+  }
+
+  return results
 }

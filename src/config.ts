@@ -12,7 +12,8 @@ export const config = {
   },
   mmx: {
     apiKey: Bun.env.MMX_API_KEY || '',
-    baseUrl: Bun.env.MMX_BASE_URL || 'https://api.minimax.chat',
+    region: Bun.env.MMX_REGION || 'cn',
+    baseUrl: Bun.env.MMX_BASE_URL || '',
   },
   gemini: {
     apiKey: Bun.env.GEMINI_API_KEY || '',
