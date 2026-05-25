@@ -3,10 +3,10 @@ import type { SearchResult } from './exa'
 
 // Models in priority order
 const GEMINI_MODELS = [
-  'gemini-3.1-flash-lite',
   'gemini-2.5-flash-lite',
-  'gemma-4-26b-a4b',
-  'gemma-4-31b',
+  'gemini-2.5-flash',
+  'gemma-4-31b-it',
+  'gemma-4-26b-a4b-it',
 ]
 
 interface KeyEntry {

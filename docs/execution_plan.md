@@ -222,7 +222,7 @@ llm_proxy/
 #### 2.3 Google Gemini Grounding 搜索
 3. `src/search/gemini.ts`：
    - 多密钥轮询：从环境变量 `GOOGLE_API_KEY_1` 到 `GOOGLE_API_KEY_10` 加载所有可用密钥
-   - 模型 fallback：`gemini-3.1-flash-lite` → `gemini-2.5-flash-lite` → `gemma-4-26b-a4b` → `gemma-4-31b`
+   - 模型 fallback：`gemini-2.5-flash-lite` → `gemini-2.5-flash` → `gemma-4-31b-it` → `gemma-4-26b-a4b-it`
    - 429 错误自动切换密钥和模型，10s 冷却期
    - 调用 Gemini API + `google_search` 工具
    - 解析 `groundingMetadata`：
