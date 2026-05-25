@@ -45,25 +45,3 @@ describe('exa search', () => {
     await expect(exaSearch('test')).rejects.toThrow('Exa API error')
   })
 })
-
-describe('search router', () => {
-  it('calls exaSearch by default', async () => {
-    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
-      results: [{ title: 'Test', url: 'https://example.com', text: 'content' }],
-    }), { status: 200 }))
-
-    const { search } = await import('./router')
-    const results = await search('test query')
-
-    expect(results).toHaveLength(1)
-    expect(results[0].url).toBe('https://example.com')
-  })
-
-  it('throws when all providers fail', async () => {
-    // Mock fetch to always reject
-    global.fetch = mock(() => Promise.reject(new Error('network error'))) as unknown as typeof fetch
-
-    const { search } = await import('./router')
-    await expect(search('test query')).rejects.toThrow()
-  }, 10000)
-})

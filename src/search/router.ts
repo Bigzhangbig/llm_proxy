@@ -25,16 +25,16 @@ export async function search(query: string, provider?: SearchProvider): Promise<
     console.error(`[Search] ${p} failed:`, err)
     // Fallback to other providers
     if (p !== 'exa') {
-      try { return await exaSearch(query, config.search.maxResults) } catch { /* ignore */ }
+      try { return await exaSearch(query, config.search.maxResults) } catch (err) { console.error('[Search] Fallback exa failed:', err) }
     }
     if (p !== 'mmx') {
-      try { return await mmxSearch(query) } catch { /* ignore */ }
+      try { return await mmxSearch(query) } catch (err) { console.error('[Search] Fallback mmx failed:', err) }
     }
     if (p !== 'gemini') {
       try {
         const result = await geminiSearch(query)
         return result.searchResults
-      } catch { /* ignore */ }
+      } catch (err) { console.error('[Search] Fallback gemini failed:', err) }
     }
     throw err
   }

@@ -33,6 +33,11 @@ export async function mmxSearch(query: string): Promise<SearchResult[]> {
   }
 
   const data = await resp.json() as MmxSearchResponse
+
+  if (data.base_resp && data.base_resp.status_code !== 0) {
+    throw new Error(`MiniMax search error: ${data.base_resp.status_code} - ${data.base_resp.status_msg}`)
+  }
+
   const organic = data.organic || []
 
   return organic.map((r) => ({

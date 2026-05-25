@@ -1,6 +1,21 @@
-import { describe, it, expect, mock } from 'bun:test'
+import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
 
 describe('mmx search', () => {
+  let savedMmxApiKey: string | undefined
+
+  beforeEach(() => {
+    savedMmxApiKey = process.env.MMX_API_KEY
+    process.env.MMX_API_KEY = 'test-key'
+  })
+
+  afterEach(() => {
+    if (savedMmxApiKey !== undefined) {
+      process.env.MMX_API_KEY = savedMmxApiKey
+    } else {
+      delete process.env.MMX_API_KEY
+    }
+  })
+
   it('returns normalized results from MiniMax search API', async () => {
     const mockFetch = mock(() => Promise.resolve(new Response(JSON.stringify({
       organic: [
@@ -9,9 +24,6 @@ describe('mmx search', () => {
       base_resp: { status_code: 0, status_msg: 'success' },
     }), { status: 200 })))
     global.fetch = mockFetch as unknown as typeof fetch
-
-    // Ensure a key is available
-    process.env.MMX_API_KEY = process.env.MMX_API_KEY || 'test-key'
 
     const { mmxSearch } = await import('../search/mmx')
     const results = await mmxSearch('test query')
@@ -34,11 +46,20 @@ describe('mmx search', () => {
     )
   })
 
-  it('throws when API returns error', async () => {
+  it('throws when API returns HTTP error', async () => {
     global.fetch = mock(() => Promise.resolve(new Response('error', { status: 500 }))) as unknown as typeof fetch
 
-    process.env.MMX_API_KEY = process.env.MMX_API_KEY || 'test-key'
     const { mmxSearch } = await import('../search/mmx')
     await expect(mmxSearch('test')).rejects.toThrow('MiniMax search error')
+  })
+
+  it('throws when base_resp.status_code is non-zero', async () => {
+    global.fetch = mock(() => Promise.resolve(new Response(JSON.stringify({
+      organic: [],
+      base_resp: { status_code: 1001, status_msg: 'invalid parameter' },
+    }), { status: 200 }))) as unknown as typeof fetch
+
+    const { mmxSearch } = await import('../search/mmx')
+    await expect(mmxSearch('test')).rejects.toThrow('MiniMax search error: 1001 - invalid parameter')
   })
 })

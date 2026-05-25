@@ -94,6 +94,10 @@ class GeminiKeyPool {
   }
 }
 
+export function resetPool(): void {
+  pool = null;
+}
+
 let pool: GeminiKeyPool | null = null
 
 function getPool(): GeminiKeyPool {
