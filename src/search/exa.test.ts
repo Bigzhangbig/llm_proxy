@@ -1,5 +1,4 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
-import type { SearchResult } from './exa'
 
 // Mock fetch globally
 const mockFetch = mock(() => Promise.resolve(new Response(JSON.stringify({ results: [] }), { status: 200 })))
@@ -8,6 +7,8 @@ beforeEach(() => {
   mockFetch.mockReset()
   mockFetch.mockReturnValue(Promise.resolve(new Response(JSON.stringify({ results: [] }), { status: 200 })))
   global.fetch = mockFetch as unknown as typeof fetch
+  // Ensure EXA_API_KEY is set for tests
+  process.env.EXA_API_KEY = process.env.EXA_API_KEY || 'test-key-for-ci'
 })
 
 describe('exa search', () => {
@@ -18,33 +19,30 @@ describe('exa search', () => {
       ],
     }), { status: 200 }))
 
-    // Config is already loaded with whatever EXA_API_KEY is in the environment
-    // Just verify the function works and calls the API correctly
     const { exaSearch } = await import('./exa')
     const results = await exaSearch('test query')
 
-    // If EXA_API_KEY is not set, the function throws before making a request
-    // If it is set, we get results
-    const apiKey = process.env.EXA_API_KEY || ''
-    if (!apiKey) {
-      await expect(exaSearch('query')).rejects.toThrow('EXA_API_KEY not configured')
-    } else {
-      expect(results).toHaveLength(1)
-      expect(results[0].title).toBe('Example')
-      expect(results[0].url).toBe('https://example.com')
-      expect(results[0].content).toBe('some content')
-      expect(results[0].highlights).toEqual(['highlight1'])
+    expect(results).toHaveLength(1)
+    expect(results[0].title).toBe('Example')
+    expect(results[0].url).toBe('https://example.com')
+    expect(results[0].content).toBe('some content')
+    expect(results[0].highlights).toEqual(['highlight1'])
 
-      expect(mockFetch).toHaveBeenCalledWith(
-        'https://api.exa.ai/search',
-        expect.objectContaining({
-          method: 'POST',
-          headers: expect.objectContaining({
-            'x-api-key': apiKey,
-          }),
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://api.exa.ai/search',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'x-api-key': process.env.EXA_API_KEY,
         }),
-      )
-    }
+      }),
+    )
+  })
+
+  it('throws on API error', async () => {
+    mockFetch.mockResolvedValueOnce(new Response('error', { status: 500 }))
+    const { exaSearch } = await import('./exa')
+    await expect(exaSearch('test')).rejects.toThrow('Exa API error')
   })
 })
 
@@ -57,14 +55,8 @@ describe('search router', () => {
     const { search } = await import('./router')
     const results = await search('test query')
 
-    const apiKey = process.env.EXA_API_KEY || ''
-    if (!apiKey) {
-      // Without API key, search will throw (exaSearch throws)
-      expect(results).toHaveLength(0)
-    } else {
-      expect(results).toHaveLength(1)
-      expect(results[0].url).toBe('https://example.com')
-    }
+    expect(results).toHaveLength(1)
+    expect(results[0].url).toBe('https://example.com')
   })
 
   it('throws when all providers fail', async () => {
