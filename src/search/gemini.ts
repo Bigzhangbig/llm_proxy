@@ -174,10 +174,28 @@ function parseGeminiResponse(data: Record<string, unknown>): GeminiGroundingResu
   const candidate = candidates?.[0]
   const metadata = (candidate?.groundingMetadata || {}) as Record<string, unknown>
   const chunks = (metadata.groundingChunks || []) as Array<{ web?: { uri: string; title: string } }>
+  const supports = (metadata.groundingSupports || []) as Array<{
+    segment?: { text?: string }
+    groundingChunkIndices?: number[]
+  }>
 
-  const searchResults: SearchResult[] = chunks.map((c) => ({
+  // Aggregate grounding segment texts by chunk index
+  const chunkTexts: string[][] = chunks.map(() => [])
+  for (const support of supports) {
+    const text = support.segment?.text
+    const indices = support.groundingChunkIndices || []
+    if (!text) continue
+    for (const idx of indices) {
+      if (idx >= 0 && idx < chunks.length) {
+        chunkTexts[idx].push(text)
+      }
+    }
+  }
+
+  const searchResults: SearchResult[] = chunks.map((c, i) => ({
     title: c.web?.title || '',
     url: c.web?.uri || '',
+    content: chunkTexts[i].join('\n'),
   }))
 
   return {
