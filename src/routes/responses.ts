@@ -25,6 +25,7 @@ async function agenticLoop(
 
   while (round < MAX_AGENTIC_ROUNDS) {
     round++
+    console.log(`[AgenticLoop] Round ${round}`)
 
     const resp = await fetch(getDeepSeekUrl(), {
       method: 'POST',
@@ -33,161 +34,134 @@ async function agenticLoop(
     })
 
     if (!resp.ok) {
+      console.error(`[AgenticLoop] Round ${round}: Provider error ${resp.status}`)
       throw new Error(`Provider error: ${resp.status}`)
     }
 
-    const reader = resp.body!.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
     let content = ''
     let reasoning = ''
     const toolCalls = new Map<number, { id: string; type: string; function: { name: string; arguments: string } }>()
     let usage: Record<string, unknown> | null = null
-    let reasoningSent = false
-    let messageSent = false
     let shouldContinue = false
+    const isStreaming = providerRequest.stream === true
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const { lines, remaining } = parseSSELines(buffer)
-      buffer = remaining
-
-      for (const chunk of lines) {
-        if (chunk.done) continue
-        if (chunk.usage) usage = chunk.usage
-
-        const delta = chunk.choices?.[0]?.delta
-        const finishReason = chunk.choices?.[0]?.finish_reason
-
-        if (delta?.reasoning_content) reasoning += delta.reasoning_content
-        if (delta?.content) content += delta.content
-        if (delta?.tool_calls) {
-          for (const tc of delta.tool_calls) {
-            if (!toolCalls.has(tc.index)) {
-              toolCalls.set(tc.index, { id: tc.id || '', type: 'function', function: { name: '', arguments: '' } })
-            }
-            const existing = toolCalls.get(tc.index)!
-            if (tc.id) existing.id = tc.id
-            if (tc.function?.name) existing.function.name += tc.function.name
-            if (tc.function?.arguments) existing.function.arguments += tc.function.arguments
-          }
-        }
-
-        // Emit SSE events when streaming
-        if (stream) {
-          if (delta?.reasoning_content) {
-            if (!reasoningSent) {
-              reasoningSent = true
-              await stream.writeSSE({
-                event: 'response.output_item.added',
-                data: JSON.stringify({
-                  type: 'response.output_item.added',
-                  response_id: responseId,
-                  output_index: 0,
-                  item: { type: 'reasoning', id: `rs_${responseId}`, status: 'in_progress', summary: [] },
-                }),
-              })
-            }
-            await stream.writeSSE({
-              event: 'response.reasoning_summary_text.delta',
-              data: JSON.stringify({
-                type: 'response.reasoning_summary_text.delta',
-                response_id: responseId,
-                item_id: `rs_${responseId}`,
-                output_index: 0,
-                content_index: 0,
-                delta: delta.reasoning_content,
-              }),
+    if (!isStreaming) {
+      // Non-streaming: parse raw JSON response
+      const data = await resp.json() as any
+      const choice = data.choices?.[0]
+      const msg = choice?.message
+      if (msg) {
+        content = msg.content || ''
+        reasoning = msg.reasoning_content || ''
+        if (msg.tool_calls) {
+          for (const tc of msg.tool_calls) {
+            toolCalls.set(tc.index, {
+              id: tc.id || '',
+              type: 'function',
+              function: { name: tc.function?.name || '', arguments: tc.function?.arguments || '' },
             })
-          }
-
-          if (delta?.content) {
-            if (!messageSent) {
-              if (reasoningSent) {
-                await stream.writeSSE({
-                  event: 'response.output_item.done',
-                  data: JSON.stringify({
-                    type: 'response.output_item.done',
-                    response_id: responseId,
-                    output_index: 0,
-                    item: {
-                      type: 'reasoning',
-                      id: `rs_${responseId}`,
-                      status: 'completed',
-                      summary: [{ type: 'summary_text', text: reasoning }],
-                    },
-                  }),
-                })
-              }
-              messageSent = true
-              await stream.writeSSE({
-                event: 'response.output_item.added',
-                data: JSON.stringify({
-                  type: 'response.output_item.added',
-                  response_id: responseId,
-                  output_index: reasoningSent ? 1 : 0,
-                  item: { type: 'message', id: `msg_${responseId}`, status: 'in_progress', role: 'assistant', content: [] },
-                }),
-              })
-            }
-            await stream.writeSSE({
-              event: 'response.output_text.delta',
-              data: JSON.stringify({
-                type: 'response.output_text.delta',
-                response_id: responseId,
-                item_id: `msg_${responseId}`,
-                output_index: reasoningSent ? 1 : 0,
-                content_index: 0,
-                delta: delta.content,
-              }),
-            })
-          }
-        }
-
-        // Check for _gateway_web_search tool call
-        if (finishReason === 'tool_calls') {
-          const allToolCalls = Array.from(toolCalls.values())
-          const searchCall = allToolCalls.find((tc) => tc.function.name === '_gateway_web_search')
-
-          if (searchCall) {
-            let searchQuery = ''
-            try {
-              const args = JSON.parse(searchCall.function.arguments) as { query?: string }
-              searchQuery = args.query || ''
-            } catch {
-              searchQuery = searchCall.function.arguments
-            }
-
-            console.log(`[AgenticLoop] Round ${round}: searching "${searchQuery}"`)
-            const results = await search(searchQuery)
-            const searchContext = results
-              .map((r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${r.content}`)
-              .join('\n\n')
-
-            messages.push({
-              role: 'assistant',
-              content: content || null,
-              tool_calls: allToolCalls,
-            })
-
-            messages.push({
-              role: 'tool',
-              tool_call_id: searchCall.id,
-              content: searchContext || 'No search results found.',
-            })
-
-            fullContent = content
-            fullReasoning = reasoning
-            lastUsage = usage
-            shouldContinue = true
-            break
           }
         }
       }
+      if (data.usage) usage = data.usage
+      const finishReason = choice?.finish_reason
+      console.log(`[AgenticLoop] Round ${round}: finish_reason=${finishReason}, tool_calls=${toolCalls.size}`)
 
-      if (shouldContinue) break
+      if (finishReason === 'tool_calls') {
+        const allToolCalls = Array.from(toolCalls.values())
+        const searchCall = allToolCalls.find((tc) => tc.function.name === '_gateway_web_search')
+        if (searchCall) {
+          let searchQuery = ''
+          try {
+            const args = JSON.parse(searchCall.function.arguments) as { query?: string }
+            searchQuery = args.query || ''
+          } catch { searchQuery = searchCall.function.arguments }
+          console.log(`[AgenticLoop] Round ${round}: searching "${searchQuery}"`)
+          const results = await search(searchQuery)
+          console.log(`[AgenticLoop] Got ${results.length} search results`)
+          const searchContext = results.map((r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${r.content}`).join('\n\n')
+          messages.push({ role: 'assistant', content: content || null, reasoning_content: reasoning || null, tool_calls: allToolCalls })
+          messages.push({ role: 'tool', tool_call_id: searchCall.id, content: searchContext || 'No search results found.' })
+          shouldContinue = true
+        }
+      }
+    } else {
+      // Streaming: parse SSE chunks
+      const reader = resp.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let reasoningSent = false
+      let messageSent = false
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const { lines, remaining } = parseSSELines(buffer)
+        buffer = remaining
+
+        for (const chunk of lines) {
+          if (chunk.done) continue
+          if (chunk.usage) usage = chunk.usage
+          const delta = chunk.choices?.[0]?.delta
+          const finishReason = chunk.choices?.[0]?.finish_reason
+          if (delta?.reasoning_content) reasoning += delta.reasoning_content
+          if (delta?.content) content += delta.content
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              if (!toolCalls.has(tc.index)) {
+                toolCalls.set(tc.index, { id: tc.id || '', type: 'function', function: { name: '', arguments: '' } })
+              }
+              const existing = toolCalls.get(tc.index)!
+              if (tc.id) existing.id = tc.id
+              if (tc.function?.name) existing.function.name += tc.function.name
+              if (tc.function?.arguments) existing.function.arguments += tc.function.arguments
+            }
+          }
+
+          // Emit SSE events to client
+          if (stream) {
+            if (delta?.reasoning_content) {
+              if (!reasoningSent) {
+                reasoningSent = true
+                await stream.writeSSE({ event: 'response.output_item.added', data: JSON.stringify({ type: 'response.output_item.added', response_id: responseId, output_index: 0, item: { type: 'reasoning', id: `rs_${responseId}`, status: 'in_progress', summary: [] } }) })
+              }
+              await stream.writeSSE({ event: 'response.reasoning_summary_text.delta', data: JSON.stringify({ type: 'response.reasoning_summary_text.delta', response_id: responseId, item_id: `rs_${responseId}`, output_index: 0, content_index: 0, delta: delta.reasoning_content }) })
+            }
+            if (delta?.content) {
+              if (!messageSent) {
+                if (reasoningSent) {
+                  await stream.writeSSE({ event: 'response.output_item.done', data: JSON.stringify({ type: 'response.output_item.done', response_id: responseId, output_index: 0, item: { type: 'reasoning', id: `rs_${responseId}`, status: 'completed', summary: [{ type: 'summary_text', text: reasoning }] } }) })
+                }
+                messageSent = true
+                await stream.writeSSE({ event: 'response.output_item.added', data: JSON.stringify({ type: 'response.output_item.added', response_id: responseId, output_index: reasoningSent ? 1 : 0, item: { type: 'message', id: `msg_${responseId}`, status: 'in_progress', role: 'assistant', content: [] } }) })
+              }
+              await stream.writeSSE({ event: 'response.output_text.delta', data: JSON.stringify({ type: 'response.output_text.delta', response_id: responseId, item_id: `msg_${responseId}`, output_index: reasoningSent ? 1 : 0, content_index: 0, delta: delta.content }) })
+            }
+          }
+
+          if (finishReason === 'tool_calls') {
+            const allToolCalls = Array.from(toolCalls.values())
+            const searchCall = allToolCalls.find((tc) => tc.function.name === '_gateway_web_search')
+            if (searchCall) {
+              let searchQuery = ''
+              try {
+                const args = JSON.parse(searchCall.function.arguments) as { query?: string }
+                searchQuery = args.query || ''
+              } catch { searchQuery = searchCall.function.arguments }
+              console.log(`[AgenticLoop] Round ${round}: searching "${searchQuery}"`)
+              const results = await search(searchQuery)
+              console.log(`[AgenticLoop] Got ${results.length} search results`)
+              const searchContext = results.map((r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${r.content}`).join('\n\n')
+              messages.push({ role: 'assistant', content: content || null, reasoning_content: reasoning || null, tool_calls: allToolCalls })
+              messages.push({ role: 'tool', tool_call_id: searchCall.id, content: searchContext || 'No search results found.' })
+              shouldContinue = true
+              break
+            }
+          }
+        }
+        if (shouldContinue) break
+      }
     }
 
     if (!shouldContinue) {
@@ -195,6 +169,26 @@ async function agenticLoop(
       fullReasoning = reasoning
       lastUsage = usage
       break
+    }
+  }
+
+  // If we exhausted rounds without a text response, force one final request without tools
+  if (!fullContent && messages.length > 0) {
+    console.log(`[AgenticLoop] Forcing final response (no tools)`)
+    const finalRequest = { ...providerRequest, tools: undefined, stream: false }
+    const resp = await fetch(getDeepSeekUrl(), {
+      method: 'POST',
+      headers: getDeepSeekHeaders(),
+      body: JSON.stringify(finalRequest),
+    })
+    if (resp.ok) {
+      const data = await resp.json() as any
+      const msg = data.choices?.[0]?.message
+      if (msg) {
+        fullContent = msg.content || ''
+        fullReasoning = msg.reasoning_content || ''
+      }
+      if (data.usage) lastUsage = data.usage
     }
   }
 

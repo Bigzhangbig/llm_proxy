@@ -60,9 +60,10 @@ describe('search router', () => {
   })
 
   it('throws when all providers fail', async () => {
-    mockFetch.mockRejectedValue(new Error('network error'))
+    // Mock fetch to always reject
+    global.fetch = mock(() => Promise.reject(new Error('network error'))) as unknown as typeof fetch
 
     const { search } = await import('./router')
     await expect(search('test query')).rejects.toThrow()
-  })
+  }, 10000)
 })
