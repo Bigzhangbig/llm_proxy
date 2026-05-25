@@ -73,3 +73,23 @@ export interface ConversationItem {
   name: string | null
   created_at: number
 }
+
+// Web search tool types
+export interface WebSearchTool {
+  type: 'web_search'
+}
+
+export interface GatewayWebSearchFunction {
+  type: 'function'
+  function: {
+    name: '_gateway_web_search'
+    description: string
+    parameters: {
+      type: 'object'
+      properties: {
+        query: { type: 'string'; description: string }
+      }
+      required: ['query']
+    }
+  }
+}
