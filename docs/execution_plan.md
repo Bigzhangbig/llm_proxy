@@ -37,8 +37,8 @@ llm_proxy/
 │   ├── search/
 │   │   ├── router.ts         # 搜索意图路由（exa/mmx/gemini）
 │   │   ├── exa.ts            # Exa API 封装
-│   │   ├── gemini.ts         # Gemini Grounding 搜索
-│   │   └── mmx.ts            # MiniMax mmx 搜索
+│   │   ├── mmx.ts            # MiniMax 搜索（POST /v1/coding_plan/search）
+│   │   └── gemini.ts         # Gemini Grounding 搜索
 │   ├── fetch/
 │   │   ├── downloader.ts     # curl 下载 + anti-bot UA
 │   │   ├── extractor.ts      # MinerU / Exa contents 提取
@@ -79,7 +79,6 @@ llm_proxy/
    DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
    DEEPSEEK_MODEL=deepseek-v4-pro
    EXA_API_KEY=
-   MMX_API_KEY=
    GEMINI_API_KEY=
    KIMI_API_KEY=
    KIMI_BASE_URL=https://api.kimi.com/coding/v1
@@ -171,7 +170,7 @@ llm_proxy/
 ## 阶段 2：Web 搜索支持
 
 ### 目标
-实现多后端 Web 搜索能力：Exa 语义搜索、mmx (MiniMax) 搜索、Google Gemini Grounding 搜索。网关根据配置或意图自动选择搜索后端，将结果注入上下文。
+实现多后端 Web 搜索能力：Exa 语义搜索、MiniMax 搜索（POST /v1/coding_plan/search）、Google Gemini Grounding 搜索。网关根据配置选择搜索后端，将结果注入上下文。
 
 ### 任务清单
 
@@ -181,11 +180,12 @@ llm_proxy/
    - POST `https://api.exa.ai/search`，`useAutoprompt: true`
    - 返回 `{ title, url, highlights }[]`
 
-#### 2.2 mmx (MiniMax) 搜索
+#### 2.2 MiniMax 搜索
 2. `src/search/mmx.ts`：
-   - 封装 mmx web search 能力
-   - 接受 query，返回 `{ title, url, content }[]`
-   - 支持 mmx 命令调用方式
+   - `mmxSearch(query): Promise<SearchResult[]>`
+   - POST `{baseUrl}/v1/coding_plan/search`，Body: `{ q: query }`
+   - 优先从 `~/.mmx/config.json` 读取 api_key 和 region，fallback 到环境变量 `MMX_API_KEY` / `MMX_REGION`
+   - 返回 `{ title, url, content }[]`，content 为 `snippet + date`
 
 #### 2.3 Google Gemini Grounding 搜索
 3. `src/search/gemini.ts`：
@@ -201,7 +201,7 @@ llm_proxy/
 #### 2.4 搜索路由
 4. `src/search/router.ts`：
    - 根据配置选择搜索后端：`SEARCH_PROVIDER=exa|mmx|gemini`
-   - 若未配置，优先级：Gemini（实时性强）→ Exa（语义精准）→ mmx
+   - 若未配置，默认使用 Exa
    - 返回统一 `SearchResult[]` 格式
 
 #### 2.5 网关集成
@@ -298,12 +298,7 @@ llm_proxy/
 2. 下载图片 → 调用小模型（Gemini Flash / MiniMax Vision）进行描述
 3. 将描述文本注入 user message 的 content 数组
 
-#### 4.2 mmx 多模态命令
-4. 集成 mmx 命令能力：
-   - 图像理解：`mmx` 图像分析
-   - 音乐生成等扩展能力（按需）
-
-#### 4.3 多模态输入转换
+#### 4.2 多模态输入转换
 5. 将 Responses API 的 `input_image_url` 转换为 Chat Completions 的 `image_url` content part
 6. 若底层模型不支持视觉，自动降级为小模型描述 + 文本注入
 
@@ -509,5 +504,5 @@ curl -s localhost:3000/v1/responses \
 | 后端 | API | 特点 | 适用场景 |
 |---|---|---|---|
 | **Exa** | `api.exa.ai/search` | 语义搜索，useAutoprompt | 学术/技术内容 |
+| **MiniMax** | `api.minimaxi.com/v1/coding_plan/search` | 中文新闻/网页搜索 | 中文内容/国内资讯 |
 | **Gemini Grounding** | Gemini API + `google_search` | 实时性强，返回 groundingMetadata | 实时新闻/天气 |
-| **mmx** | MiniMax API | mmx web search | 通用搜索 |

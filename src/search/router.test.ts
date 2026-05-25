@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'bun:test'
+import { describe, it, expect, mock } from 'bun:test'
 
 describe('search router', () => {
   it('search function exists and is callable', async () => {
@@ -7,13 +7,10 @@ describe('search router', () => {
   })
 
   it('search throws when provider has no keys', async () => {
-    // This will fail because no real keys, but should not throw unexpected errors
+    // Mock fetch to always reject quickly
+    global.fetch = mock(() => Promise.reject(new Error('network error'))) as unknown as typeof fetch
+
     const { search } = await import('../search/router')
-    try {
-      await search('test query', 'gemini')
-    } catch (err: any) {
-      // Should throw a meaningful error, not crash
-      expect(err).toBeInstanceOf(Error)
-    }
+    await expect(search('test query', 'gemini')).rejects.toBeInstanceOf(Error)
   })
 })
