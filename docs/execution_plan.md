@@ -304,7 +304,6 @@ llm_proxy/
 
 #### 3.5 网关集成
 5. 在 Agentic Loop 中，当搜索结果包含需要深入阅读的 URL 时，自动触发 fetch 管道
-   - 或作为独立工具 `_gateway_web_fetch` 暴露给模型
 
 ### 验收用例
 | 编号 | 用例 | 操作 | 预期结果 |
@@ -360,7 +359,7 @@ llm_proxy/
 
 #### 5.2 tool_calls 拦截与回填
 3. 检测 `finish_reason: "tool_calls"` → 提取 tool_calls 数组
-4. 对于内置虚拟工具（`_gateway_web_search`, `_gateway_web_fetch`）：网关代执行
+4. 对于内置虚拟工具（`_gateway_web_search`）：网关代执行
 5. 对于普通 function 工具：将 tool_calls 透传给客户端，等待客户端返回 tool result
 6. 对于供应商原生内置工具（Kimi `$web_search`, MiMo `web_search`）：自动回弹空 tool result
 
@@ -476,42 +475,35 @@ SEARCH_PROVIDER=gemini curl -N localhost:3000/v1/responses \
 # 验证：Gemini groundingMetadata 解析，脚注正确插入
 ```
 
-### E2E-5：Web Fetch 管道
-```bash
-curl -s localhost:3000/v1/responses \
-  -d '{"model":"deepseek-v4-pro","input":"总结这个网页的核心观点 https://example.com/article","stream":false,"tools":[{"type":"web_fetch"}]}'
-# 验证：下载 → MinerU 提取 → 小模型精炼 → 回答含核心观点
-```
-
-### E2E-6：Kimi 推理 + 搜索
+### E2E-5：Kimi 推理 + 搜索
 ```bash
 curl -N localhost:3000/v1/responses \
   -d '{"model":"kimi-k2.6","input":"今天深圳天气","stream":true,"tools":[{"type":"web_search"}]}'
 # 验证：reasoning 事件 + 实时天气（$web_search 回弹）
 ```
 
-### E2E-7：MiniMax 推理
+### E2E-6：MiniMax 推理
 ```bash
 curl -N localhost:3000/v1/responses \
   -d '{"model":"MiniMax-M2.7","input":"光合作用原理","stream":true}'
 # 验证：reasoning_details 数组正确解析为 reasoning_summary_text.delta
 ```
 
-### E2E-8：MiMo 推理 + 搜索
+### E2E-7：MiMo 推理 + 搜索
 ```bash
 curl -N localhost:3000/v1/responses \
   -d '{"model":"mimo-v2.5-pro","input":"最新AI论文","stream":true,"tools":[{"type":"web_search"}]}'
 # 验证：reasoning + web_search 工具服务端执行
 ```
 
-### E2E-9：多工具调用
+### E2E-8：多工具调用
 ```bash
 curl -s localhost:3000/v1/responses \
   -d '{"model":"deepseek-v4-pro","input":"搜索今天的新闻并总结","stream":false,"tools":[{"type":"web_search"},{"type":"function","function":{"name":"summarize","parameters":{}}}]}'
 # 验证：工具调用 → 搜索 → 结果回填 → 总结输出
 ```
 
-### E2E-10：并发安全
+### E2E-9：并发安全
 ```bash
 curl -s localhost:3000/v1/responses \
   -d '{"model":"deepseek-v4-pro","input":"问题1","conversation":"conv-x","stream":false}' &
