@@ -35,19 +35,19 @@ llm_proxy/
 │   │   ├── lock.ts           # per-conversation 互斥锁
 │   │   └── schema.ts         # JSON Schema 降级
 │   ├── search/
-│   │   ├── router.ts         # 搜索意图路由（exa/mmx/gemini）
-│   │   ├── exa.ts            # Exa API 封装
-│   │   ├── mmx.ts            # MiniMax 搜索（POST /v1/coding_plan/search）
-│   │   └── gemini.ts         # Gemini Grounding 搜索
-│   ├── fetch/
+│   │   ├── router.ts         # 搜索意图路由（exa/mmx/gemini）✅
+│   │   ├── exa.ts            # Exa API 封装 ✅
+│   │   ├── mmx.ts            # MiniMax 搜索（POST /v1/coding_plan/search）✅
+│   │   └── gemini.ts         # Gemini Grounding 搜索 ✅
+│   ├── fetch/                # ⏳ 阶段 3 待实现
 │   │   ├── downloader.ts     # curl 下载 + anti-bot UA
 │   │   ├── extractor.ts      # MinerU / Exa contents 提取
 │   │   └── refiner.ts        # 小模型内容精炼
 │   ├── providers/
-│   │   ├── deepseek.ts       # DeepSeek V4 适配器
-│   │   ├── kimi.ts           # Kimi k2.6 适配器
-│   │   ├── minimax.ts        # MiniMax M2.7 适配器
-│   │   └── mimo.ts           # MiMo V2.5-Pro 适配器
+│   │   ├── deepseek.ts       # DeepSeek V4 适配器 ✅
+│   │   ├── kimi.ts           # Kimi k2.6 适配器 ⏳
+│   │   ├── minimax.ts        # MiniMax M2.7 适配器 ⏳
+│   │   └── mimo.ts           # MiMo V2.5-Pro 适配器 ⏳
 │   └── db/
 │       └── index.ts          # bun:sqlite 初始化 + CRUD
 └── llm_proxy.db
@@ -74,17 +74,48 @@ llm_proxy/
    ```
 3. 创建 `.env.example`：
    ```
-   PORT=3000
+   # Cloudflare AI Gateway
+   CLOUDFLARE_ACCOUNT_ID=
+   CLOUDFLARE_GATEWAY_ID=
+
+   # Google AI Studio (多密钥轮询，支持 GOOGLE_API_KEY_1 到 GOOGLE_API_KEY_10)
+   GOOGLE_API_KEY_1=
+   GOOGLE_API_KEY_2=
+
+   # DeepSeek
    DEEPSEEK_API_KEY=
    DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
    DEEPSEEK_MODEL=deepseek-v4-pro
+
+   # Exa Search
    EXA_API_KEY=
-   GEMINI_API_KEY=
+
+   # MiniMax Search
+   MMX_API_KEY=
+   MMX_REGION=cn
+
+   # Kimi (Moonshot)
    KIMI_API_KEY=
    KIMI_BASE_URL=https://api.kimi.com/coding/v1
-   MINIMAX_API_KEY=
+   KIMI_MODEL=kimi-k2.6
+
+   # MiMo (Xiaomi)
    MIMO_API_KEY=
    MIMO_BASE_URL=https://token-plan-cn.xiaomimimo.com/v1
+   MIMO_MODEL=MiMo-V2.5-Pro
+
+   # Tavily Search
+   TAVILY_API_KEY=
+
+   # Search Provider (exa|mmx|gemini)
+   SEARCH_PROVIDER=exa
+   SEARCH_MAX_RESULTS=5
+
+   # Agentic Loop
+   MAX_AGENTIC_ROUNDS=3
+
+   # Server
+   PORT=3000
    DEBUG=false
    ```
 4. 创建 `src/config.ts`：读取 `Bun.env`，导出类型安全配置。
@@ -189,7 +220,10 @@ llm_proxy/
 
 #### 2.3 Google Gemini Grounding 搜索
 3. `src/search/gemini.ts`：
-   - 调用 Gemini API（`gemini-2.5-flash` 或 `gemini-2.5-flash-lite`）+ `google_search` 工具
+   - 多密钥轮询：从环境变量 `GOOGLE_API_KEY_1` 到 `GOOGLE_API_KEY_10` 加载所有可用密钥
+   - 模型 fallback：`gemini-2.5-flash` → `gemini-2.5-flash-lite` → `gemma-4-26b-a4b-it` → `gemma-4-31b-it`
+   - 429 错误自动切换密钥和模型，10s 冷却期
+   - 调用 Gemini API + `google_search` 工具
    - 解析 `groundingMetadata`：
      - `webSearchQueries`：实际搜索词
      - `groundingChunks`：数据源（`{ web: { uri, title } }`）
@@ -211,7 +245,7 @@ llm_proxy/
    - 拦截 `finish_reason: "tool_calls"` + 工具名 `_gateway_web_search`
    - 调用搜索路由获取结果
    - 拼装 `role: "tool"` 消息，自动发起第二轮 completions（Agentic Loop）
-   - 最多 3 轮循环保护
+   - 最多 `MAX_AGENTIC_ROUNDS` 轮循环保护，默认 3，可通过环境变量配置
 
 ### 验收用例
 | 编号 | 用例 | 操作 | 预期结果 |
@@ -231,7 +265,7 @@ llm_proxy/
 
 ---
 
-## 阶段 3：Web Fetch 支持
+## 阶段 3：Web Fetch 支持 ⏳
 
 ### 目标
 实现网页内容抓取与提取能力：下载网页 HTML → MinerU/Exa 提取正文 → 小模型精炼，为模型提供网页内容上下文。
@@ -286,7 +320,7 @@ llm_proxy/
 
 ---
 
-## 阶段 4：多模态支持
+## 阶段 4：多模态支持 ⏳
 
 ### 目标
 支持图像理解、音频转录等多模态输入，通过小模型预处理后注入上下文。
@@ -312,7 +346,7 @@ llm_proxy/
 
 ---
 
-## 阶段 5：工具调用支持
+## 阶段 5：工具调用支持 ⏳
 
 ### 目标
 实现 OpenAI Responses API 的完整工具调用生命周期：工具定义透传、tool_calls 拦截、tool result 回填、多轮 Agentic Loop。
@@ -352,7 +386,7 @@ llm_proxy/
 
 ---
 
-## 阶段 6：其他供应商适配
+## 阶段 6：其他供应商适配 ⏳
 
 ### 目标
 在 DeepSeek 已验证的核心管道基础上，扩展支持 Kimi k2.6、MiniMax M2.7、MiMo V2.5-Pro。每个供应商仅需处理其特有差异。
@@ -504,5 +538,5 @@ curl -s localhost:3000/v1/responses \
 | 后端 | API | 特点 | 适用场景 |
 |---|---|---|---|
 | **Exa** | `api.exa.ai/search` | 语义搜索，useAutoprompt | 学术/技术内容 |
-| **MiniMax** | `api.minimaxi.com/v1/coding_plan/search` | 中文新闻/网页搜索 | 中文内容/国内资讯 |
+| **MiniMax** | `api.minimaxi.com/v1/coding_plan/search` (cn) / `api.minimax.io/v1/coding_plan/search` (sg) | 中文新闻/网页搜索 | 中文内容/国内资讯 |
 | **Gemini Grounding** | Gemini API + `google_search` | 实时性强，返回 groundingMetadata | 实时新闻/天气 |
