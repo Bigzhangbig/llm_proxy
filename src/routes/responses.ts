@@ -506,31 +506,50 @@ responsesRouter.post('/responses', async (c) => {
       const data = await resp.json() as Record<string, unknown>
       const choice = (data.choices as Array<Record<string, unknown>>)?.[0]
       const msg = choice?.message as Record<string, unknown> | undefined
+      const finishReason = choice?.finish_reason as string | undefined
       let outputParsed = null
       if (body.text?.format?.type === 'json_schema' && msg?.content) {
         const { parsed } = tryParseJson(msg.content)
         outputParsed = parsed
       }
+
+      // Build output items
+      const output: Array<Record<string, unknown>> = []
+      if (msg?.tool_calls && finishReason === 'tool_calls') {
+        const rawToolCalls = msg.tool_calls as Array<Record<string, unknown>>
+        for (const tc of rawToolCalls) {
+          const fn = tc.function as Record<string, unknown> | undefined
+          output.push({
+            type: 'function_call',
+            id: (tc.id as string) || `call_${randomUUID().slice(0, 12)}`,
+            name: (fn?.name as string) || '',
+            arguments: (fn?.arguments as string) || '',
+            status: 'completed',
+          })
+        }
+      } else if (msg?.content) {
+        output.push({
+          type: 'message',
+          id: `msg_${randomUUID().slice(0, 12)}`,
+          role: 'assistant',
+          content: [{ type: 'output_text', text: msg.content }],
+          status: 'completed',
+        })
+      }
+
+      const usageData = data.usage as Record<string, unknown> | undefined
       const response: ResponsesResponse = {
         id: responseId,
         object: 'response',
         conversation_id: conversationId,
         status: 'completed',
-        output: msg
-          ? [{
-              type: 'message',
-              id: `msg_${randomUUID().slice(0, 12)}`,
-              role: 'assistant',
-              content: [{ type: 'output_text', text: msg.content || '' }],
-              status: 'completed',
-            }]
-          : [],
-        usage: data.usage
+        output,
+        usage: usageData
           ? {
-              input_tokens: data.usage.prompt_tokens,
-              output_tokens: data.usage.completion_tokens,
-              total_tokens: data.usage.total_tokens,
-              output_tokens_details: { reasoning_tokens: data.usage.completion_tokens_details?.reasoning_tokens || 0 },
+              input_tokens: usageData.prompt_tokens as number,
+              output_tokens: usageData.completion_tokens as number,
+              total_tokens: usageData.total_tokens as number,
+              output_tokens_details: { reasoning_tokens: (usageData.completion_tokens_details as Record<string, number>)?.reasoning_tokens || 0 },
             }
           : undefined,
         output_parsed: outputParsed,
@@ -540,8 +559,8 @@ responsesRouter.post('/responses', async (c) => {
           conversationId,
           typeof body.input === 'string' ? body.input : JSON.stringify(body.input),
           msg,
-          msg.reasoning_content,
-          msg.reasoning_details
+          msg.reasoning_content as string | undefined,
+          msg.reasoning_details,
         ))
       }
       return c.json(response)
