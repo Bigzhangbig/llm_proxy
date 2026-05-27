@@ -21,7 +21,11 @@ export async function downloadPage(url: string): Promise<DownloadResult> {
     args.push('--proxy', proxy)
   }
 
-  args.push(url)
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    throw new Error(`Invalid URL: must start with http:// or https://`)
+  }
+
+  args.push('--', url)
 
   const proc = Bun.spawn(['curl', ...args], {
     stdout: 'pipe',

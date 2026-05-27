@@ -3,7 +3,7 @@ import { streamSSE, type SSEStreamingApi } from 'hono/streaming'
 import { randomUUID } from 'crypto'
 import { config, type ProviderConfig } from '../config'
 import { appendItems, getConversationItems } from '../db'
-import { inputToMessages, itemsToMessages, buildSaveItems } from '../core/assembler'
+import { inputToMessages, itemsToMessages, buildSaveItems, type ChatMessage } from '../core/assembler'
 import { injectSchema, tryParseJson } from '../core/schema'
 import { resolveProvider, buildProviderRequest, getProviderHeaders, getProviderUrl } from '../providers/router'
 import { buildKimiRequest } from '../providers/kimi'
@@ -12,7 +12,7 @@ import { buildMiMoRequest } from '../providers/mimo'
 import { parseSSELines } from '../core/stream'
 import { search } from '../search/router'
 import { fetchPage } from '../fetch/router'
-import type { ResponsesRequest, ResponsesResponse } from '../types'
+import type { ResponsesRequest, ResponsesResponse, ConversationItem } from '../types'
 
 const MAX_AGENTIC_ROUNDS = Number(Bun.env.MAX_AGENTIC_ROUNDS || '3')
 
@@ -169,7 +169,8 @@ async function agenticLoop(
         }
       }
     } else {
-      const reader = resp.body!.getReader()
+      if (!resp.body) throw new Error('Provider returned empty body')
+      const reader = resp.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
       let reasoningSent = false
@@ -309,8 +310,8 @@ responsesRouter.post('/responses', async (c) => {
   const conversationId = body.conversation || body.previous_response_id || `conv_${randomUUID().slice(0, 12)}`
 
   // Build messages array
-  let messages: any[] = []
-  const existingItems = getConversationItems(conversationId) as any[]
+  let messages: ChatMessage[] = []
+  const existingItems = getConversationItems(conversationId) as ConversationItem[]
   if (existingItems.length > 0) {
     messages = itemsToMessages(existingItems)
   }
@@ -472,10 +473,11 @@ responsesRouter.post('/responses', async (c) => {
         body: JSON.stringify(providerRequest),
       })
       if (!resp.ok) {
-        return c.json({ error: { message: await resp.text(), code: resp.status } }, resp.status as any)
+        return c.json({ error: { message: await resp.text(), code: resp.status } }, resp.status)
       }
-      const data = await resp.json() as any
-      const msg = data.choices?.[0]?.message
+      const data = await resp.json() as Record<string, unknown>
+      const choice = (data.choices as Array<Record<string, unknown>>)?.[0]
+      const msg = choice?.message as Record<string, unknown> | undefined
       let outputParsed = null
       if (body.text?.format?.type === 'json_schema' && msg?.content) {
         const { parsed } = tryParseJson(msg.content)
@@ -515,8 +517,9 @@ responsesRouter.post('/responses', async (c) => {
         ))
       }
       return c.json(response)
-    } catch (err: any) {
-      return c.json({ error: { message: err.message, type: 'internal_error' } }, 500)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: { message, type: 'internal_error' } }, 500)
     }
   }
 
@@ -606,14 +609,21 @@ responsesRouter.post('/responses', async (c) => {
         return
       }
 
-      const reader = upstreamResp.body!.getReader()
+      if (!upstreamResp.body) {
+        await stream.writeSSE({
+          event: 'error',
+          data: JSON.stringify({ error: { message: 'Provider returned empty body', type: 'internal_error' } }),
+        })
+        return
+      }
+      const reader = upstreamResp.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
       let reasoningSent = false
       let messageSent = false
       let fullReasoning = ''
       let fullContent = ''
-      let lastUsage: any = null
+      let lastUsage: Record<string, unknown> | null = null
       const itemId = `rs_${randomUUID().slice(0, 12)}`
       const msgItemId = `msg_${randomUUID().slice(0, 12)}`
 
@@ -788,7 +798,8 @@ responsesRouter.post('/responses', async (c) => {
         ))
       }
     })
-  } catch (err: any) {
-    return c.json({ error: { message: err.message, type: 'internal_error' } }, 500)
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: { message, type: 'internal_error' } }, 500)
   }
 })

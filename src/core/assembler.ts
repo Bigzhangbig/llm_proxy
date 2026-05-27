@@ -1,18 +1,31 @@
 import type { ConversationItem } from '../types'
 import { randomUUID } from 'crypto'
 
+interface ChatMessage {
+  role: string
+  content: string | Array<Record<string, unknown>> | null
+  reasoning_content?: string
+  reasoning_details?: unknown
+  tool_calls?: unknown
+  tool_call_id?: string
+  name?: string
+}
+
 // DB items -> Chat Completions messages
-export function itemsToMessages(items: ConversationItem[]): any[] {
-  const messages: any[] = []
+export function itemsToMessages(items: ConversationItem[]): ChatMessage[] {
+  const messages: ChatMessage[] = []
   for (const item of items) {
     if (item.role === 'user') {
       messages.push({ role: 'user', content: item.content })
     } else if (item.role === 'assistant') {
-      const msg: any = { role: 'assistant', content: item.content }
-      // MUST preserve reasoning_content for DeepSeek V4
+      const msg: ChatMessage = { role: 'assistant', content: item.content }
       if (item.reasoning_content) msg.reasoning_content = item.reasoning_content
-      if (item.reasoning_details) msg.reasoning_details = JSON.parse(item.reasoning_details)
-      if (item.tool_calls) msg.tool_calls = JSON.parse(item.tool_calls)
+      if (item.reasoning_details) {
+        try { msg.reasoning_details = JSON.parse(item.reasoning_details) } catch {}
+      }
+      if (item.tool_calls) {
+        try { msg.tool_calls = JSON.parse(item.tool_calls) } catch {}
+      }
       messages.push(msg)
     } else if (item.role === 'tool') {
       messages.push({
@@ -27,8 +40,8 @@ export function itemsToMessages(items: ConversationItem[]): any[] {
 }
 
 // Responses input -> Chat Completions messages (first turn only)
-export function inputToMessages(input: string | any[], instructions?: string): any[] {
-  const messages: any[] = []
+export function inputToMessages(input: string | Array<Record<string, unknown>>, instructions?: string): ChatMessage[] {
+  const messages: ChatMessage[] = []
   if (instructions) {
     messages.push({ role: 'system', content: instructions })
   }
@@ -40,7 +53,6 @@ export function inputToMessages(input: string | any[], instructions?: string): a
         if (typeof item.content === 'string') {
           messages.push({ role: 'user', content: item.content })
         } else if (Array.isArray(item.content)) {
-          // Multimodal content parts: convert Responses API format to Chat Completions format
           const contentParts: Array<Record<string, unknown>> = []
           for (const part of item.content) {
             if (part.type === 'input_text') {
@@ -61,28 +73,13 @@ export function inputToMessages(input: string | any[], instructions?: string): a
   return messages
 }
 
-// Chat Completions response -> Responses output items
-export function responseToOutput(message: any): any[] {
-  const items: any[] = []
-  if (message.content) {
-    items.push({
-      type: 'message',
-      id: `msg_${randomUUID().slice(0, 12)}`,
-      role: 'assistant',
-      content: [{ type: 'output_text', text: message.content }],
-      status: 'completed',
-    })
-  }
-  return items
-}
-
 // Build DB items for saving
 export function buildSaveItems(
   conversationId: string,
   userContent: string,
-  assistantMessage: any,
+  assistantMessage: { content?: string | null; reasoning_content?: string; reasoning_details?: unknown; tool_calls?: unknown },
   reasoningContent?: string,
-  reasoningDetails?: any
+  reasoningDetails?: unknown,
 ) {
   return [
     {

@@ -37,6 +37,7 @@ export interface ResponsesResponse {
 export type OutputItem =
   | { type: 'message'; id: string; role: 'assistant'; content: OutputContent[]; status: string }
   | { type: 'reasoning'; id: string; summary: SummaryContent[]; status: string }
+  | { type: 'function_call'; id: string; name: string; arguments: string; status: string }
 
 export type OutputContent = { type: 'output_text'; text: string }
 export type SummaryContent = { type: 'summary_text'; text: string }

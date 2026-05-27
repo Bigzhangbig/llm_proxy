@@ -17,7 +17,6 @@ export function buildKimiRequest(providerConfig: ProviderConfig, messages: unkno
     tool_choice: options.tool_choice,
     temperature: options.temperature,
     max_tokens: options.max_tokens,
-    thinking: { type: 'enabled' },
-    'thinking.keep': 'all',
+    thinking: { type: 'enabled', keep: 'all' },
   }
 }

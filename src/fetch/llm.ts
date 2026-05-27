@@ -58,6 +58,7 @@ export async function extractWithLlm(html: string, url: string, title: string): 
     method: 'POST',
     headers,
     body: JSON.stringify(requestBody),
+    signal: AbortSignal.timeout(30_000),
   })
 
   if (!resp.ok) {
