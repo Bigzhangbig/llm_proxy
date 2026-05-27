@@ -18,4 +18,5 @@ console.log(`llm_proxy running on http://localhost:${config.port}`)
 export default {
   port: config.port,
   fetch: app.fetch,
+  idleTimeout: 120,
 }

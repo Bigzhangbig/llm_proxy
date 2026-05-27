@@ -97,7 +97,11 @@ async function agenticLoop(
     })
 
     if (!resp.ok) {
-      console.error(`[AgenticLoop] Round ${round}: Provider error ${resp.status}`)
+      const errorBody = await resp.text()
+      console.error(`[AgenticLoop] Round ${round}: Provider error ${resp.status}: ${errorBody}`)
+      if (providerRequest.tools) {
+        console.error(`[AgenticLoop] Tools: ${JSON.stringify(providerRequest.tools).slice(0, 300)}`)
+      }
       throw new Error(`Provider error: ${resp.status}`)
     }
 
@@ -332,9 +336,33 @@ responsesRouter.post('/responses', async (c) => {
   console.log(`[Responses] model=${body.model} provider=${providerName}`)
 
   // Build provider-specific request
+  if (config.debug && body.tools) {
+    console.log(`[Responses] Input tools count: ${body.tools.length}`)
+    // Save full request for debugging
+    const fs = await import('fs')
+    fs.writeFileSync('/tmp/llm_proxy_request.json', JSON.stringify(body, null, 2))
+  }
+
+  // Convert Responses API tools format to Chat Completions format
+  // Responses: { type, name, description, parameters }
+  // Chat Completions: { type, function: { name, description, parameters } }
+  // Also filter out non-function tools (namespace, etc.) that providers don't understand
+  const convertedTools = body.tools
+    ?.filter((t: Record<string, unknown>) => t.type === 'function' || t.type === 'web_search' || t.type === 'web_fetch')
+    .map((t: Record<string, unknown>) => {
+      if (t.type === 'function' && t.name && !t.function) {
+        return { type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters, strict: t.strict } }
+      }
+      return t
+    })
+
+  if (config.debug && convertedTools) {
+    console.log(`[Responses] Converted tools: ${JSON.stringify(convertedTools).slice(0, 800)}`)
+  }
+
   const requestOptions = {
     stream: body.stream,
-    tools: body.tools,
+    tools: convertedTools,
     tool_choice: body.tool_choice,
     temperature: body.temperature,
     max_tokens: body.max_tokens,
@@ -532,6 +560,15 @@ responsesRouter.post('/responses', async (c) => {
         stream.onAbort(() => { aborted = true })
 
         try {
+          // Emit response.created
+          await stream.writeSSE({
+            event: 'response.created',
+            data: JSON.stringify({
+              type: 'response.created',
+              response: { id: responseId, object: 'response', status: 'in_progress', output: [] },
+            }),
+          })
+
           const result = await agenticLoop(messages, providerRequest, providerConfig, responseId, hasGatewayTools, stream)
 
           // Finalize: message done (skip if tool calls were returned — already emitted)
@@ -595,6 +632,15 @@ responsesRouter.post('/responses', async (c) => {
     return streamSSE(c, async (stream) => {
       let aborted = false
       stream.onAbort(() => { aborted = true })
+
+      // Emit response.created
+      await stream.writeSSE({
+        event: 'response.created',
+        data: JSON.stringify({
+          type: 'response.created',
+          response: { id: responseId, object: 'response', status: 'in_progress', output: [] },
+        }),
+      })
 
       const upstreamResp = await fetch(getProviderUrl(providerConfig), {
         method: 'POST',
@@ -690,7 +736,7 @@ responsesRouter.post('/responses', async (c) => {
           }
 
           // Transition: reasoning done + message added
-          if (hasReasoning && delta.content && !messageSent) {
+          if (reasoningSent && delta.content && !messageSent) {
             await stream.writeSSE({
               event: 'response.output_item.done',
               data: JSON.stringify({
