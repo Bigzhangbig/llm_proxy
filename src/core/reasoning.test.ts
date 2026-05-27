@@ -13,7 +13,7 @@ describe('ReasoningStateMachine', () => {
     expect(sm.getState()).toBe('REASONING')
     expect(events).toHaveLength(1)
     expect(events[0].event).toBe('response.output_item.added')
-    expect(events[0].data.item.type).toBe('reasoning')
+    expect((events[0].data.item as Record<string, unknown>).type).toBe('reasoning')
   })
 
   it('transitions to TEXT when content arrives after reasoning', () => {
@@ -24,9 +24,9 @@ describe('ReasoningStateMachine', () => {
     // Should have: reasoning done + message added + text delta = 3 events
     expect(events).toHaveLength(3)
     expect(events[0].event).toBe('response.output_item.done')
-    expect(events[0].data.item.type).toBe('reasoning')
+    expect((events[0].data.item as Record<string, unknown>).type).toBe('reasoning')
     expect(events[1].event).toBe('response.output_item.added')
-    expect(events[1].data.item.type).toBe('message')
+    expect((events[1].data.item as Record<string, unknown>).type).toBe('message')
     expect(events[2].event).toBe('response.output_text.delta')
     expect(events[2].data.delta).toBe('The answer')
   })
@@ -37,7 +37,7 @@ describe('ReasoningStateMachine', () => {
     expect(sm.getState()).toBe('TEXT')
     expect(events).toHaveLength(2)
     expect(events[0].event).toBe('response.output_item.added')
-    expect(events[0].data.item.type).toBe('message')
+    expect((events[0].data.item as Record<string, unknown>).type).toBe('message')
     expect(events[1].event).toBe('response.output_text.delta')
     expect(events[1].data.delta).toBe('Hello!')
   })
@@ -69,7 +69,7 @@ describe('ReasoningStateMachine', () => {
     // First chunk in IDLE transitions state but emits item.added, not delta
     expect(events).toHaveLength(1)
     expect(events[0].event).toBe('response.output_item.added')
-    expect(events[0].data.item.type).toBe('reasoning')
+    expect((events[0].data.item as Record<string, unknown>).type).toBe('reasoning')
   })
 
   it('processes reasoning_details content in REASONING state', () => {
@@ -98,12 +98,12 @@ describe('ReasoningStateMachine', () => {
     // Should have: reasoning done + message added + message done + completed = 4 events
     expect(events).toHaveLength(4)
     expect(events[0].event).toBe('response.output_item.done')
-    expect(events[0].data.item.type).toBe('reasoning')
+    expect((events[0].data.item as Record<string, unknown>).type).toBe('reasoning')
     expect(events[1].event).toBe('response.output_item.added')
-    expect(events[1].data.item.type).toBe('message')
+    expect((events[1].data.item as Record<string, unknown>).type).toBe('message')
     expect(events[2].event).toBe('response.output_item.done')
-    expect(events[2].data.item.type).toBe('message')
-    expect(events[2].data.item.content).toEqual([{ type: 'output_text', text: '' }])
+    expect((events[2].data.item as Record<string, unknown>).type).toBe('message')
+    expect((events[2].data.item as Record<string, unknown>).content).toEqual([{ type: 'output_text', text: '' }])
     expect(events[3].event).toBe('response.completed')
   })
 
@@ -114,8 +114,8 @@ describe('ReasoningStateMachine', () => {
     // Should have: message done + completed = 2 events
     expect(events).toHaveLength(2)
     expect(events[0].event).toBe('response.output_item.done')
-    expect(events[0].data.item.type).toBe('message')
-    expect(events[0].data.item.content).toEqual([{ type: 'output_text', text: 'Hello' }])
+    expect((events[0].data.item as Record<string, unknown>).type).toBe('message')
+    expect((events[0].data.item as Record<string, unknown>).content).toEqual([{ type: 'output_text', text: 'Hello' }])
     expect(events[1].event).toBe('response.completed')
   })
 

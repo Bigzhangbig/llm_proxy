@@ -1,14 +1,14 @@
 import type { ConversationItem } from '../types'
 import { randomUUID } from 'crypto'
 
-interface ChatMessage {
+export interface ChatMessage {
   role: string
   content: string | Array<Record<string, unknown>> | null
-  reasoning_content?: string
+  reasoning_content?: string | null
   reasoning_details?: unknown
   tool_calls?: unknown
-  tool_call_id?: string
-  name?: string
+  tool_call_id?: string | null
+  name?: string | null
 }
 
 // DB items -> Chat Completions messages
@@ -21,10 +21,14 @@ export function itemsToMessages(items: ConversationItem[]): ChatMessage[] {
       const msg: ChatMessage = { role: 'assistant', content: item.content }
       if (item.reasoning_content) msg.reasoning_content = item.reasoning_content
       if (item.reasoning_details) {
-        try { msg.reasoning_details = JSON.parse(item.reasoning_details) } catch {}
+        try { msg.reasoning_details = JSON.parse(item.reasoning_details) } catch (err) {
+          console.warn('[Assembler] Failed to parse reasoning_details:', err)
+        }
       }
       if (item.tool_calls) {
-        try { msg.tool_calls = JSON.parse(item.tool_calls) } catch {}
+        try { msg.tool_calls = JSON.parse(item.tool_calls) } catch (err) {
+          console.warn('[Assembler] Failed to parse tool_calls:', err)
+        }
       }
       messages.push(msg)
     } else if (item.role === 'tool') {

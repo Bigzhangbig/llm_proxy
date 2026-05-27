@@ -43,20 +43,20 @@ export function getConversationItems(convId: string) {
   return stmts.getConversationItems.all(convId)
 }
 
-export function appendItems(convId: string, items: any[]) {
+export function appendItems(convId: string, items: Array<Record<string, unknown>>) {
   db.transaction(() => {
     stmts.insertConversation.run(convId)
     for (const item of items) {
       stmts.insertItem.run(
-        item.id || randomUUID(),
+        (item.id as string) || randomUUID(),
         convId,
-        item.role,
-        item.content || null,
-        item.reasoning_content || null,
+        item.role as string,
+        (item.content as string) || null,
+        (item.reasoning_content as string) || null,
         item.reasoning_details ? JSON.stringify(item.reasoning_details) : null,
         item.tool_calls ? JSON.stringify(item.tool_calls) : null,
-        item.tool_call_id || null,
-        item.name || null
+        (item.tool_call_id as string) || null,
+        (item.name as string) || null
       )
     }
     stmts.updateConversation.run(convId)

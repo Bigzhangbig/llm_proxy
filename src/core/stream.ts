@@ -14,8 +14,8 @@ export function parseSSELines(buffer: string): { lines: any[]; remaining: string
       } else {
         try {
           lines.push(JSON.parse(data))
-        } catch {
-          // skip malformed JSON
+        } catch (err) {
+          console.warn('[Stream] Malformed SSE JSON:', err)
         }
       }
     }

@@ -17,12 +17,12 @@ export class ReasoningStateMachine {
   }
 
   // Process a single SSE chunk, return events to emit
-  processChunk(delta: any): { events: Array<{ event: string; data: any }> } {
-    const events: Array<{ event: string; data: any }> = []
+  processChunk(delta: Record<string, unknown>): { events: Array<{ event: string; data: Record<string, unknown> }> } {
+    const events: Array<{ event: string; data: Record<string, unknown> }> = []
 
     if (this.state === 'IDLE') {
       // Check if reasoning starts
-      if (delta.reasoning_content || (delta.reasoning_details && delta.reasoning_details.length > 0)) {
+      if (delta.reasoning_content || (delta.reasoning_details && Array.isArray(delta.reasoning_details) && delta.reasoning_details.length > 0)) {
         this.state = 'REASONING'
         events.push({
           event: 'response.output_item.added',
@@ -71,8 +71,8 @@ export class ReasoningStateMachine {
             delta: delta.reasoning_content,
           },
         })
-      } else if (delta.reasoning_details && delta.reasoning_details.length > 0) {
-        for (const detail of delta.reasoning_details) {
+      } else if (delta.reasoning_details && (delta.reasoning_details as unknown[]).length > 0) {
+        for (const detail of delta.reasoning_details as Array<Record<string, unknown>>) {
           if (detail.text) {
             this.reasoningText += detail.text
             events.push({
@@ -151,8 +151,8 @@ export class ReasoningStateMachine {
   }
 
   // Finish: emit final done events
-  finish(usage?: any): { events: Array<{ event: string; data: any }> } {
-    const events: Array<{ event: string; data: any }> = []
+  finish(usage?: Record<string, unknown>): { events: Array<{ event: string; data: Record<string, unknown> }> } {
+    const events: Array<{ event: string; data: Record<string, unknown> }> = []
 
     if (this.state === 'REASONING') {
       events.push({

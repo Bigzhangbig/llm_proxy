@@ -16,6 +16,11 @@ import type { ResponsesRequest, ResponsesResponse, ConversationItem } from '../t
 
 const MAX_AGENTIC_ROUNDS = Number(Bun.env.MAX_AGENTIC_ROUNDS || '3')
 
+// SSE event helper
+async function emitSSE(stream: SSEStreamingApi, event: string, data: Record<string, unknown>): Promise<void> {
+  await stream.writeSSE({ event, data: JSON.stringify(data) })
+}
+
 interface GatewayToolCall {
   id: string
   type: string
@@ -71,7 +76,7 @@ async function executeGatewayTool(call: GatewayToolCall): Promise<string> {
 }
 
 async function agenticLoop(
-  messages: Array<Record<string, unknown>>,
+  messages: ChatMessage[],
   providerRequest: Record<string, unknown>,
   providerConfig: ProviderConfig,
   responseId: string,
@@ -211,19 +216,19 @@ async function agenticLoop(
             if (delta?.reasoning_content) {
               if (!reasoningSent) {
                 reasoningSent = true
-                await stream.writeSSE({ event: 'response.output_item.added', data: JSON.stringify({ type: 'response.output_item.added', response_id: responseId, output_index: 0, item: { type: 'reasoning', id: `rs_${responseId}`, status: 'in_progress', summary: [] } }) })
+                await emitSSE(stream, 'response.output_item.added', { type: 'response.output_item.added', response_id: responseId, output_index: 0, item: { type: 'reasoning', id: `rs_${responseId}`, status: 'in_progress', summary: [] } })
               }
-              await stream.writeSSE({ event: 'response.reasoning_summary_text.delta', data: JSON.stringify({ type: 'response.reasoning_summary_text.delta', response_id: responseId, item_id: `rs_${responseId}`, output_index: 0, content_index: 0, delta: delta.reasoning_content }) })
+              await emitSSE(stream, 'response.reasoning_summary_text.delta', { type: 'response.reasoning_summary_text.delta', response_id: responseId, item_id: `rs_${responseId}`, output_index: 0, content_index: 0, delta: delta.reasoning_content })
             }
             if (delta?.content) {
               if (!messageSent) {
                 if (reasoningSent) {
-                  await stream.writeSSE({ event: 'response.output_item.done', data: JSON.stringify({ type: 'response.output_item.done', response_id: responseId, output_index: 0, item: { type: 'reasoning', id: `rs_${responseId}`, status: 'completed', summary: [{ type: 'summary_text', text: reasoning }] } }) })
+                  await emitSSE(stream, 'response.output_item.done', { type: 'response.output_item.done', response_id: responseId, output_index: 0, item: { type: 'reasoning', id: `rs_${responseId}`, status: 'completed', summary: [{ type: 'summary_text', text: reasoning }] } })
                 }
                 messageSent = true
-                await stream.writeSSE({ event: 'response.output_item.added', data: JSON.stringify({ type: 'response.output_item.added', response_id: responseId, output_index: reasoningSent ? 1 : 0, item: { type: 'message', id: `msg_${responseId}`, status: 'in_progress', role: 'assistant', content: [] } }) })
+                await emitSSE(stream, 'response.output_item.added', { type: 'response.output_item.added', response_id: responseId, output_index: reasoningSent ? 1 : 0, item: { type: 'message', id: `msg_${responseId}`, status: 'in_progress', role: 'assistant', content: [] } })
               }
-              await stream.writeSSE({ event: 'response.output_text.delta', data: JSON.stringify({ type: 'response.output_text.delta', response_id: responseId, item_id: `msg_${responseId}`, output_index: reasoningSent ? 1 : 0, content_index: 0, delta: delta.content }) })
+              await emitSSE(stream, 'response.output_text.delta', { type: 'response.output_text.delta', response_id: responseId, item_id: `msg_${responseId}`, output_index: reasoningSent ? 1 : 0, content_index: 0, delta: delta.content })
             }
           }
 
@@ -258,12 +263,12 @@ async function agenticLoop(
               console.log(`[AgenticLoop] Emitting ${functionCalls.length} function tool(s) to client`)
               // Finalize current message if any
               if (messageSent) {
-                await stream.writeSSE({ event: 'response.output_item.done', data: JSON.stringify({ type: 'response.output_item.done', response_id: responseId, output_index: reasoningSent ? 1 : 0, item: { type: 'message', id: `msg_${responseId}`, status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: content }] } }) })
+                await emitSSE(stream, 'response.output_item.done', { type: 'response.output_item.done', response_id: responseId, output_index: reasoningSent ? 1 : 0, item: { type: 'message', id: `msg_${responseId}`, status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: content }] } })
               }
               // Emit function tool calls
               for (const tc of functionCalls) {
-                await stream.writeSSE({ event: 'response.output_item.added', data: JSON.stringify({ type: 'response.output_item.added', response_id: responseId, output_index: reasoningSent ? 2 : 1, item: { type: 'function_call', id: tc.id, name: tc.function.name, arguments: tc.function.arguments, status: 'in_progress' } }) })
-                await stream.writeSSE({ event: 'response.output_item.done', data: JSON.stringify({ type: 'response.output_item.done', response_id: responseId, output_index: reasoningSent ? 2 : 1, item: { type: 'function_call', id: tc.id, name: tc.function.name, arguments: tc.function.arguments, status: 'completed' } }) })
+                await emitSSE(stream, 'response.output_item.added', { type: 'response.output_item.added', response_id: responseId, output_index: reasoningSent ? 2 : 1, item: { type: 'function_call', id: tc.id, name: tc.function.name, arguments: tc.function.arguments, status: 'in_progress' } })
+                await emitSSE(stream, 'response.output_item.done', { type: 'response.output_item.done', response_id: responseId, output_index: reasoningSent ? 2 : 1, item: { type: 'function_call', id: tc.id, name: tc.function.name, arguments: tc.function.arguments, status: 'completed' } })
               }
               return { fullContent: content, fullReasoning: reasoning, usage, toolCalls: functionCalls }
             }
@@ -328,7 +333,7 @@ responsesRouter.post('/responses', async (c) => {
 
   // Schema fallback
   if (body.text?.format?.type === 'json_schema') {
-    messages = injectSchema(messages, body.text.format.schema)
+    messages = injectSchema(messages as unknown as Array<Record<string, unknown>>, body.text.format.schema as Record<string, unknown>) as unknown as typeof messages
   }
 
   // Resolve provider from model name
@@ -425,8 +430,9 @@ responsesRouter.post('/responses', async (c) => {
       })
     }
 
+    const existingTools = Array.isArray(providerRequest.tools) ? providerRequest.tools : []
     providerRequest.tools = [
-      ...(providerRequest.tools || []).filter((t: { type?: string }) => t.type !== 'web_search' && t.type !== 'web_fetch'),
+      ...existingTools.filter((t: Record<string, unknown>) => t.type !== 'web_search' && t.type !== 'web_fetch'),
       ...gatewayTools,
     ]
   }
@@ -501,7 +507,7 @@ responsesRouter.post('/responses', async (c) => {
         body: JSON.stringify(providerRequest),
       })
       if (!resp.ok) {
-        return c.json({ error: { message: await resp.text(), code: resp.status } }, resp.status)
+        return c.json({ error: { message: await resp.text(), code: resp.status } }, resp.status as 400 | 401 | 403 | 404 | 500 | 502 | 503)
       }
       const data = await resp.json() as Record<string, unknown>
       const choice = (data.choices as Array<Record<string, unknown>>)?.[0]
@@ -509,7 +515,7 @@ responsesRouter.post('/responses', async (c) => {
       const finishReason = choice?.finish_reason as string | undefined
       let outputParsed = null
       if (body.text?.format?.type === 'json_schema' && msg?.content) {
-        const { parsed } = tryParseJson(msg.content)
+        const { parsed } = tryParseJson(msg.content as string)
         outputParsed = parsed
       }
 
@@ -580,32 +586,26 @@ responsesRouter.post('/responses', async (c) => {
 
         try {
           // Emit response.created
-          await stream.writeSSE({
-            event: 'response.created',
-            data: JSON.stringify({
-              type: 'response.created',
-              response: { id: responseId, object: 'response', status: 'in_progress', output: [] },
-            }),
+          await emitSSE(stream, 'response.created', {
+            type: 'response.created',
+            response: { id: responseId, object: 'response', status: 'in_progress', output: [] },
           })
 
           const result = await agenticLoop(messages, providerRequest, providerConfig, responseId, hasGatewayTools, stream)
 
           // Finalize: message done (skip if tool calls were returned — already emitted)
           if (!result.toolCalls && (result.fullContent || result.fullReasoning)) {
-            await stream.writeSSE({
-              event: 'response.output_item.done',
-              data: JSON.stringify({
-                type: 'response.output_item.done',
-                response_id: responseId,
-                output_index: result.fullReasoning ? 1 : 0,
-                item: {
-                  type: 'message',
-                  id: `msg_${responseId}`,
-                  status: 'completed',
-                  role: 'assistant',
-                  content: [{ type: 'output_text', text: result.fullContent }],
-                },
-              }),
+            await emitSSE(stream, 'response.output_item.done', {
+              type: 'response.output_item.done',
+              response_id: responseId,
+              output_index: result.fullReasoning ? 1 : 0,
+              item: {
+                type: 'message',
+                id: `msg_${responseId}`,
+                status: 'completed',
+                role: 'assistant',
+                content: [{ type: 'output_text', text: result.fullContent }],
+              },
             })
           }
 
@@ -618,14 +618,11 @@ responsesRouter.post('/responses', async (c) => {
               }
             : { input_tokens: 0, output_tokens: 0, total_tokens: 0 }
 
-          await stream.writeSSE({
-            event: 'response.completed',
-            data: JSON.stringify({
-              type: 'response.completed',
-              response_id: responseId,
-              status: 'completed',
-              usage: usageData,
-            }),
+          await emitSSE(stream, 'response.completed', {
+            type: 'response.completed',
+            response_id: responseId,
+            status: 'completed',
+            usage: usageData,
           })
 
           // Save to DB (only when we have text output, not tool calls)
@@ -639,10 +636,7 @@ responsesRouter.post('/responses', async (c) => {
           }
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err)
-          await stream.writeSSE({
-            event: 'error',
-            data: JSON.stringify({ error: { message, type: 'internal_error' } }),
-          })
+          await emitSSE(stream, 'error', { error: { message, type: 'internal_error' } })
         }
       })
     }
@@ -653,12 +647,9 @@ responsesRouter.post('/responses', async (c) => {
       stream.onAbort(() => { aborted = true })
 
       // Emit response.created
-      await stream.writeSSE({
-        event: 'response.created',
-        data: JSON.stringify({
-          type: 'response.created',
-          response: { id: responseId, object: 'response', status: 'in_progress', output: [] },
-        }),
+      await emitSSE(stream, 'response.created', {
+        type: 'response.created',
+        response: { id: responseId, object: 'response', status: 'in_progress', output: [] },
       })
 
       const upstreamResp = await fetch(getProviderUrl(providerConfig), {
@@ -667,18 +658,12 @@ responsesRouter.post('/responses', async (c) => {
         body: JSON.stringify(providerRequest),
       })
       if (!upstreamResp.ok) {
-        await stream.writeSSE({
-          event: 'error',
-          data: JSON.stringify({ error: { message: await upstreamResp.text(), code: upstreamResp.status } }),
-        })
+        await emitSSE(stream, 'error', { error: { message: await upstreamResp.text(), code: upstreamResp.status } })
         return
       }
 
       if (!upstreamResp.body) {
-        await stream.writeSSE({
-          event: 'error',
-          data: JSON.stringify({ error: { message: 'Provider returned empty body', type: 'internal_error' } }),
-        })
+        await emitSSE(stream, 'error', { error: { message: 'Provider returned empty body', type: 'internal_error' } })
         return
       }
       const reader = upstreamResp.body.getReader()
@@ -710,45 +695,36 @@ responsesRouter.post('/responses', async (c) => {
           // Emit reasoning added
           if (hasReasoning && !reasoningSent) {
             reasoningSent = true
-            await stream.writeSSE({
-              event: 'response.output_item.added',
-              data: JSON.stringify({
-                type: 'response.output_item.added',
-                response_id: responseId,
-                output_index: 0,
-                item: { type: 'reasoning', id: itemId, status: 'in_progress', summary: [] },
-              }),
+            await emitSSE(stream, 'response.output_item.added', {
+              type: 'response.output_item.added',
+              response_id: responseId,
+              output_index: 0,
+              item: { type: 'reasoning', id: itemId, status: 'in_progress', summary: [] },
             })
           }
 
           // Emit reasoning delta
           if (delta.reasoning_content) {
             fullReasoning += delta.reasoning_content
-            await stream.writeSSE({
-              event: 'response.reasoning_summary_text.delta',
-              data: JSON.stringify({
-                type: 'response.reasoning_summary_text.delta',
-                response_id: responseId,
-                item_id: itemId,
-                output_index: 0,
-                content_index: 0,
-                delta: delta.reasoning_content,
-              }),
+            await emitSSE(stream, 'response.reasoning_summary_text.delta', {
+              type: 'response.reasoning_summary_text.delta',
+              response_id: responseId,
+              item_id: itemId,
+              output_index: 0,
+              content_index: 0,
+              delta: delta.reasoning_content,
             })
           } else if (delta.reasoning_details?.length > 0) {
             for (const d of delta.reasoning_details) {
               if (d.text) {
                 fullReasoning += d.text
-                await stream.writeSSE({
-                  event: 'response.reasoning_summary_text.delta',
-                  data: JSON.stringify({
-                    type: 'response.reasoning_summary_text.delta',
-                    response_id: responseId,
-                    item_id: itemId,
-                    output_index: 0,
-                    content_index: 0,
-                    delta: d.text,
-                  }),
+                await emitSSE(stream, 'response.reasoning_summary_text.delta', {
+                  type: 'response.reasoning_summary_text.delta',
+                  response_id: responseId,
+                  item_id: itemId,
+                  output_index: 0,
+                  content_index: 0,
+                  delta: d.text,
                 })
               }
             }
@@ -756,29 +732,23 @@ responsesRouter.post('/responses', async (c) => {
 
           // Transition: reasoning done + message added
           if (reasoningSent && delta.content && !messageSent) {
-            await stream.writeSSE({
-              event: 'response.output_item.done',
-              data: JSON.stringify({
-                type: 'response.output_item.done',
-                response_id: responseId,
-                output_index: 0,
-                item: {
-                  type: 'reasoning',
-                  id: itemId,
-                  status: 'completed',
-                  summary: [{ type: 'summary_text', text: fullReasoning }],
-                },
-              }),
+            await emitSSE(stream, 'response.output_item.done', {
+              type: 'response.output_item.done',
+              response_id: responseId,
+              output_index: 0,
+              item: {
+                type: 'reasoning',
+                id: itemId,
+                status: 'completed',
+                summary: [{ type: 'summary_text', text: fullReasoning }],
+              },
             })
             messageSent = true
-            await stream.writeSSE({
-              event: 'response.output_item.added',
-              data: JSON.stringify({
-                type: 'response.output_item.added',
-                response_id: responseId,
-                output_index: 1,
-                item: { type: 'message', id: msgItemId, status: 'in_progress', role: 'assistant', content: [] },
-              }),
+            await emitSSE(stream, 'response.output_item.added', {
+              type: 'response.output_item.added',
+              response_id: responseId,
+              output_index: 1,
+              item: { type: 'message', id: msgItemId, status: 'in_progress', role: 'assistant', content: [] },
             })
           }
 
@@ -786,27 +756,21 @@ responsesRouter.post('/responses', async (c) => {
           if (delta.content) {
             if (!messageSent && !reasoningSent) {
               messageSent = true
-              await stream.writeSSE({
-                event: 'response.output_item.added',
-                data: JSON.stringify({
-                  type: 'response.output_item.added',
-                  response_id: responseId,
-                  output_index: 0,
-                  item: { type: 'message', id: msgItemId, status: 'in_progress', role: 'assistant', content: [] },
-                }),
+              await emitSSE(stream, 'response.output_item.added', {
+                type: 'response.output_item.added',
+                response_id: responseId,
+                output_index: 0,
+                item: { type: 'message', id: msgItemId, status: 'in_progress', role: 'assistant', content: [] },
               })
             }
             fullContent += delta.content
-            await stream.writeSSE({
-              event: 'response.output_text.delta',
-              data: JSON.stringify({
-                type: 'response.output_text.delta',
-                response_id: responseId,
-                item_id: msgItemId,
-                output_index: reasoningSent ? 1 : 0,
-                content_index: 0,
-                delta: delta.content,
-              }),
+            await emitSSE(stream, 'response.output_text.delta', {
+              type: 'response.output_text.delta',
+              response_id: responseId,
+              item_id: msgItemId,
+              output_index: reasoningSent ? 1 : 0,
+              content_index: 0,
+              delta: delta.content,
             })
           }
 
@@ -818,20 +782,17 @@ responsesRouter.post('/responses', async (c) => {
 
       // Finalize: message done
       if (messageSent || reasoningSent) {
-        await stream.writeSSE({
-          event: 'response.output_item.done',
-          data: JSON.stringify({
-            type: 'response.output_item.done',
-            response_id: responseId,
-            output_index: reasoningSent ? 1 : 0,
-            item: {
-              type: 'message',
-              id: msgItemId,
-              status: 'completed',
-              role: 'assistant',
-              content: [{ type: 'output_text', text: fullContent }],
-            },
-          }),
+        await emitSSE(stream, 'response.output_item.done', {
+          type: 'response.output_item.done',
+          response_id: responseId,
+          output_index: reasoningSent ? 1 : 0,
+          item: {
+            type: 'message',
+            id: msgItemId,
+            status: 'completed',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: fullContent }],
+          },
         })
       }
 
@@ -844,14 +805,11 @@ responsesRouter.post('/responses', async (c) => {
           }
         : { input_tokens: 0, output_tokens: 0, total_tokens: 0 }
 
-      await stream.writeSSE({
-        event: 'response.completed',
-        data: JSON.stringify({
-          type: 'response.completed',
-          response_id: responseId,
-          status: 'completed',
-          usage: usageData,
-        }),
+      await emitSSE(stream, 'response.completed', {
+        type: 'response.completed',
+        response_id: responseId,
+        status: 'completed',
+        usage: usageData,
       })
 
       // Save to DB

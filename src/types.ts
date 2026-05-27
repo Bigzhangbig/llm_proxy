@@ -3,12 +3,12 @@ export interface ResponsesRequest {
   model: string
   input: string | InputItem[]
   instructions?: string
-  tools?: any[]
-  tool_choice?: any
+  tools?: Array<Record<string, unknown>>
+  tool_choice?: Record<string, unknown> | string
   stream?: boolean
   temperature?: number
   max_tokens?: number
-  text?: { format?: any }
+  text?: { format?: Record<string, unknown> }
   conversation?: string
   previous_response_id?: string
 }
@@ -31,13 +31,14 @@ export interface ResponsesResponse {
   output: OutputItem[]
   usage?: Usage
   text?: { format?: any }
-  output_parsed?: any
+  output_parsed?: Record<string, unknown> | unknown[] | null
 }
 
 export type OutputItem =
   | { type: 'message'; id: string; role: 'assistant'; content: OutputContent[]; status: string }
   | { type: 'reasoning'; id: string; summary: SummaryContent[]; status: string }
   | { type: 'function_call'; id: string; name: string; arguments: string; status: string }
+  | Record<string, unknown>
 
 export type OutputContent = { type: 'output_text'; text: string }
 export type SummaryContent = { type: 'summary_text'; text: string }
@@ -52,13 +53,13 @@ export interface Usage {
 // Chat Completions request (what we send to provider)
 export interface ChatCompletionRequest {
   model: string
-  messages: any[]
+  messages: Array<Record<string, unknown>>
   stream?: boolean
-  tools?: any[]
-  tool_choice?: any
+  tools?: Array<Record<string, unknown>>
+  tool_choice?: Record<string, unknown> | string
   temperature?: number
   max_tokens?: number
-  response_format?: any
+  response_format?: Record<string, unknown>
   stream_options?: { include_usage: boolean }
 }
 

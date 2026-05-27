@@ -14,17 +14,24 @@ export async function withLock<T>(conversationId: string, fn: () => Promise<T>):
   locks.set(conversationId, { promise, resolve: resolveLock })
 
   // Timeout protection
+  let timedOut = false
   const timeout = setTimeout(() => {
+    timedOut = true
     resolveLock()
     locks.delete(conversationId)
   }, LOCK_TIMEOUT)
 
   try {
+    if (timedOut) {
+      throw new Error(`Lock timeout for conversation ${conversationId}`)
+    }
     return await fn()
   } finally {
     clearTimeout(timeout)
-    resolveLock()
-    locks.delete(conversationId)
+    if (!timedOut) {
+      resolveLock()
+      locks.delete(conversationId)
+    }
   }
 }
 

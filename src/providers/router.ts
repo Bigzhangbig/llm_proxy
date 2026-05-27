@@ -1,22 +1,9 @@
 import { config, type ProviderConfig } from '../config'
+import { buildBaseRequest, type ProviderOptions } from './base'
 
-export function buildProviderRequest(providerConfig: ProviderConfig, messages: unknown[], options: {
-  stream?: boolean
-  tools?: unknown[]
-  tool_choice?: unknown
-  temperature?: number
-  max_tokens?: number
-  extra?: Record<string, unknown>
-}): Record<string, unknown> {
+export function buildProviderRequest(providerConfig: ProviderConfig, messages: unknown[], options: ProviderOptions & { extra?: Record<string, unknown> }): Record<string, unknown> {
   return {
-    model: providerConfig.model,
-    messages,
-    stream: options.stream ?? true,
-    stream_options: options.stream ? { include_usage: true } : undefined,
-    tools: options.tools,
-    tool_choice: options.tool_choice,
-    temperature: options.temperature,
-    max_tokens: options.max_tokens,
+    ...buildBaseRequest(providerConfig, messages, options),
     ...options.extra,
   }
 }

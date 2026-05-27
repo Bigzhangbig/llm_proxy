@@ -1,33 +1,17 @@
-import { config } from '../config'
+import type { ProviderConfig } from '../config'
+import { buildBaseRequest, type ProviderOptions } from './base'
 
-export function buildDeepSeekRequest(messages: any[], options: {
-  stream?: boolean
-  tools?: any[]
-  tool_choice?: any
-  temperature?: number
-  max_tokens?: number
-  response_format?: any
-}) {
-  return {
-    model: config.deepseek.model,
-    messages,
-    stream: options.stream ?? true,
-    stream_options: options.stream ? { include_usage: true } : undefined,
-    tools: options.tools,
-    tool_choice: options.tool_choice,
-    temperature: options.temperature,
-    max_tokens: options.max_tokens,
-    response_format: options.response_format,
-  }
+export function buildDeepSeekRequest(providerConfig: ProviderConfig, messages: Array<Record<string, unknown>>, options: ProviderOptions): Record<string, unknown> {
+  return buildBaseRequest(providerConfig, messages, options)
 }
 
-export function getDeepSeekHeaders() {
+export function getDeepSeekHeaders(providerConfig: ProviderConfig): Record<string, string> {
   return {
     'Content-Type': 'application/json',
-    'Authorization': `Bearer ${config.deepseek.apiKey}`,
+    'Authorization': `Bearer ${providerConfig.apiKey}`,
   }
 }
 
-export function getDeepSeekUrl() {
-  return `${config.deepseek.baseUrl}/chat/completions`
+export function getDeepSeekUrl(providerConfig: ProviderConfig): string {
+  return `${providerConfig.baseUrl}/chat/completions`
 }
