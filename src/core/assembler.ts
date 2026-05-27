@@ -40,11 +40,20 @@ export function inputToMessages(input: string | any[], instructions?: string): a
         if (typeof item.content === 'string') {
           messages.push({ role: 'user', content: item.content })
         } else if (Array.isArray(item.content)) {
-          // multimodal content parts - for now just extract text
-          const textParts = item.content
-            .filter((p: any) => p.type === 'input_text')
-            .map((p: any) => p.text)
-          messages.push({ role: 'user', content: textParts.join('\n') || '[multimodal content]' })
+          // Multimodal content parts: convert Responses API format to Chat Completions format
+          const contentParts: Array<Record<string, unknown>> = []
+          for (const part of item.content) {
+            if (part.type === 'input_text') {
+              contentParts.push({ type: 'text', text: part.text })
+            } else if (part.type === 'input_image_url') {
+              contentParts.push({ type: 'image_url', image_url: { url: part.image_url?.url || part.url } })
+            }
+          }
+          if (contentParts.length === 1 && contentParts[0].type === 'text') {
+            messages.push({ role: 'user', content: (contentParts[0] as { text: string }).text })
+          } else if (contentParts.length > 0) {
+            messages.push({ role: 'user', content: contentParts })
+          }
         }
       }
     }

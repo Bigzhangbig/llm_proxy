@@ -27,6 +27,7 @@ export interface ResponsesResponse {
   id: string
   object: 'response'
   status: 'completed' | 'failed' | 'in_progress'
+  conversation_id?: string
   output: OutputItem[]
   usage?: Usage
   text?: { format?: any }

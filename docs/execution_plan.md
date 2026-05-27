@@ -266,57 +266,84 @@ llm_proxy/
 
 ---
 
-## 阶段 3：Web Fetch 支持 ⏳
+## 阶段 3：Web Fetch 内置工具支持 ⏳
 
 ### 目标
-实现网页内容抓取与提取能力：下载网页 HTML → MinerU/Exa 提取正文 → 小模型精炼，为模型提供网页内容上下文。
+实现 `web_fetch` 内置工具，支持通过 URL 直接提取网页正文内容。客户端在 `tools` 中配置 `{"type": "web_fetch"}`，网关将其替换为 `_gateway_web_fetch` 虚拟函数，由网关本地执行网页下载与内容提取，将结果作为 `role: "tool"` 消息回填给模型。
+
+支持三种提取后端：MinerU CLI（本地免 Token）、Gemini 轻量模型、Cloudflare Workers AI 小模型。
 
 ### 任务清单
 
 #### 3.1 网页下载
 1. `src/fetch/downloader.ts`：
-   - `curlDownload(url, outputPath): Promise<{ path, size }>`
-   - 伪造 UA（Chrome 120），`--max-time 15 --connect-timeout 5`
+   - `downloadPage(url): Promise<{ html: string; title: string }>`
+   - 使用 `curl -L -s` 下载，伪造 UA（Chrome 120）
+   - `--max-time 15 --connect-timeout 5`
    - 支持代理配置 `HTTP_PROXY`
-   - 返回下载文件路径和大小
+   - 从 HTML 正则提取 `<title>` 标签
+   - HTML 超过 5MB 时截断，记录 warn 日志
+   - 失败时抛出 `Error('Failed to download page')`
 
-#### 3.2 内容提取
-2. `src/fetch/extractor.ts`：
-   - 双模策略：
-     - `< 10MB`：`mineru-open-api flash-extract <file> -o <dir>`（免 Token）
-     - `≥ 10MB`：`mineru-open-api extract <file> -f html -o <dir>`（高精度）
+#### 3.2 内容提取（三后端路由）
+2. `src/fetch/router.ts`：
+   - `fetchPage(url): Promise<{ title: string; content: string }>`
+   - 先调用 `downloadPage(url)` 获取 HTML
+   - 根据 `FETCH_PROVIDER` 环境变量路由到不同后端
+
+3. `src/fetch/mineru.ts` — MinerU CLI 后端（默认）：
+   - `extractWithMineru(html, title): Promise<string>`
+   - 将 HTML 写入临时文件 `/tmp/llm_proxy_fetch/raw_{hash}.html`
+   - `< 10MB`：`mineru-open-api flash-extract <file> -o <dir>`（免 Token，限 20 页）
+   - `≥ 10MB`：`mineru-open-api extract <file> -f html -o <dir>`（需 API Token，全量）
    - 递归查找输出目录中的 `.md` 文件
-   - Exa 备选：`exaSearch` 返回结果中的 `highlights` 字段可作为轻量替代
+   - 清理临时 HTML 和输出目录
+   - 返回 Markdown 文本
 
-#### 3.3 小模型精炼
-3. `src/fetch/refiner.ts`：
-   - `refinePageContent(query, rawMarkdown, config): Promise<RefinedContext>`
-   - 使用配置的轻量模型（默认 `gemini-3.1-flash-lite`，可配 `gemma-4-26b-a4b`）
-   - Prompt：提取与 query 相关的核心事实/数据，输出 Markdown 列表
-   - 不相关则返回 `[无相关干货]`
-   - `temperature: 0.1`，截取前 30k 字符
-   - 并发控制：`p-limit(3)`
+4. `src/fetch/llm.ts` — Gemini / Cloudflare LLM 后端：
+   - `extractWithLlm(html, url, title): Promise<string>`
+   - 构建 Prompt：从 HTML 中提取正文，去除广告/导航/页脚/脚本，输出干净 Markdown
+   - HTML 截取前 `FETCH_MAX_LENGTH` 字符（默认 30k）防止超长
+   - 调用轻量模型 API：`FETCH_LLM_BASE_URL` + `FETCH_LLM_API_KEY`
+   - 模型：`FETCH_LLM_MODEL`（默认 `gemini-2.5-flash-lite`）
+   - `temperature: 0.1`
+   - Cloudflare 后端使用 Workers AI 格式（`POST /accounts/{account_id}/ai/run/{model}`），复用 `CLOUDFLARE_ACCOUNT_ID`
+   - 返回模型输出的 Markdown 文本
 
-#### 3.4 管道整合
-4. `src/search/pipeline.ts`：串联 download → extract → refine 管道
-   - 清理临时文件
-   - 返回拼接好的上下文 Markdown（标明来源 URL）
+#### 3.3 网关集成（Agentic Loop）
+5. `src/routes/responses.ts`：
+   - 检测 `body.tools` 中含 `type: 'web_fetch'` → 设置 `hasFetchTool = true`
+   - 将 `web_fetch` 替换为 `_gateway_web_fetch` function 工具（参数：`url: string`）
+   - Agentic Loop 触发条件扩展为 `hasSearchTool || hasFetchTool`
+   - 拦截 `finish_reason: "tool_calls"` 中的 `_gateway_web_fetch`：
+     - 解析参数获取 `url`
+     - 调用 `fetchPage(url)`
+     - 将结果格式化为 tool result：`标题: {title}\n来源: {url}\n---\n{content}`
+     - 追加 `assistant` + `tool` 消息，启动下一轮
+   - **多工具并行**：模型可能同时调用 `_gateway_web_search` 和 `_gateway_web_fetch`，需遍历所有网关工具 calls，并行执行，每个生成独立 `role: "tool"` 消息
 
-#### 3.5 网关集成
-5. 在 Agentic Loop 中，当搜索结果包含需要深入阅读的 URL 时，自动触发 fetch 管道
+#### 3.4 环境变量
+```
+FETCH_PROVIDER=mineru        # mineru | gemini | cloudflare
+FETCH_MAX_LENGTH=30000
+FETCH_LLM_MODEL=gemini-2.5-flash-lite
+FETCH_LLM_BASE_URL=
+FETCH_LLM_API_KEY=
+```
 
 ### 验收用例
 | 编号 | 用例 | 操作 | 预期结果 |
 |---|---|---|---|
-| 3.1 | curl 下载 | `downloader("https://example.com")` | 本地 HTML 文件存在，大小合理 |
-| 3.2 | MinerU 快速提取 | < 10MB HTML | 输出 Markdown 文件，内容为网页正文 |
-| 3.3 | MinerU 精确提取 | ≥ 10MB HTML | 输出 Markdown，表格/公式保留 |
-| 3.4 | 小模型精炼 | 传入长 Markdown + query | 返回 500-1000 Token 干货列表 |
-| 3.5 | 无关过滤 | 传入无关网页 | 返回 `[无相关干货]` |
-| 3.6 | 并发下载 | 5 个 URL 并发 | p-limit 控制最多 3 个同时执行 |
-| 3.7 | 临时文件清理 | 管道完成后 | /tmp 无残留 HTML/MD 文件 |
-| 3.8 | 管道完整流程 | 搜索 → 下载 → 提取 → 精炼 | 输出含来源 URL 的精炼上下文 |
-| 3.9 | 超时处理 | 慢响应网站 | 15s 后超时，不阻塞管道 |
+| 3.1 | MinerU 提取 | `fetchPage("https://example.com")` provider=mineru | 返回网页正文 Markdown |
+| 3.2 | Gemini 提取 | `fetchPage("https://example.com")` provider=gemini | 调用 Gemini API 返回提取正文 |
+| 3.3 | Cloudflare 提取 | `fetchPage("https://example.com")` provider=cloudflare | 调用 Workers AI 返回提取正文 |
+| 3.4 | curl 下载失败 | 不可达 URL | 抛出清晰错误，不崩溃 |
+| 3.5 | 大网页截断 | > 5MB HTML | 截断后处理，记录 warn |
+| 3.6 | 临时文件清理 | 提取完成后 | /tmp/llm_proxy_fetch 无残留 |
+| 3.7 | 独立 web_fetch 工具 | POST 含 `tools: [{"type":"web_fetch"}]` | `_gateway_web_fetch` 被调用，返回网页内容 |
+| 3.8 | search + fetch 共存 | 同时配置 web_search + web_fetch | 两种工具均可被模型调用 |
+| 3.9 | 多工具并行 | 一轮返回 search + fetch 两个 tool_calls | 两个结果都正确回填 |
+| 3.10 | 超时处理 | 慢响应网站 | 15s 后 curl 超时，不阻塞管道 |
 
 ---
 
@@ -355,11 +382,15 @@ llm_proxy/
 
 #### 5.1 工具定义透传
 1. 将 Responses API 的 `tools` 数组转换为 Chat Completions 的 `tools` 格式
-2. 过滤/替换内置工具为虚拟工具（如 `web_search` → `_gateway_web_search`）
+2. 过滤/替换内置工具为虚拟工具：
+   - `web_search` → `_gateway_web_search`
+   - `web_fetch` → `_gateway_web_fetch`
 
 #### 5.2 tool_calls 拦截与回填
 3. 检测 `finish_reason: "tool_calls"` → 提取 tool_calls 数组
-4. 对于内置虚拟工具（`_gateway_web_search`）：网关代执行
+4. 对于内置虚拟工具：
+   - `_gateway_web_search`：网关代执行搜索，回填结果
+   - `_gateway_web_fetch`：网关代执行网页下载与提取，回填结果
 5. 对于普通 function 工具：将 tool_calls 透传给客户端，等待客户端返回 tool result
 6. 对于供应商原生内置工具（Kimi `$web_search`, MiMo `web_search`）：自动回弹空 tool result
 
@@ -368,21 +399,27 @@ llm_proxy/
 8. 每轮记录 tool_calls 和 tool_results 到 SQLite
 9. 循环终止条件：finish_reason != "tool_calls" 或达到最大轮次
 
-#### 5.4 结构化 tool output
-10. 支持 tool result 为 JSON 字符串
-11. 支持多工具并行调用（多个 tool_calls 同时返回）
+#### 5.4 多工具并行处理
+10. 模型一轮内可能同时返回多个 tool_calls（如 `_gateway_web_search` + `_gateway_web_fetch`）
+11. 遍历所有网关虚拟工具 calls，并行执行（`Promise.all`）
+12. 每个 tool call 生成独立的 `role: "tool"` 消息，按 `tool_call_id` 对应回填
+
+#### 5.5 结构化 tool output
+13. 支持 tool result 为 JSON 字符串
+14. 支持多工具并行调用（多个 tool_calls 同时返回）
 
 ### 验收用例
 | 编号 | 用例 | 操作 | 预期结果 |
 |---|---|---|---|
 | 5.1 | 工具透传 | 定义自定义 function 工具 | 底层收到 tools 定义 |
 | 5.2 | tool_calls 拦截 | 模型返回 tool_calls | SSE 中出现 tool_calls 事件 |
-| 5.3 | 虚拟工具代执行 | `_gateway_web_search` 被调用 | 网关执行搜索，自动回填结果 |
-| 5.4 | 原生工具回弹 | Kimi `$web_search` 被调用 | 自动回弹空 content，Kimi 服务端执行 |
-| 5.5 | 多轮 loop | 模型连续调用 3 次工具 | 每次结果正确回填，最终输出完整 |
-| 5.6 | 循环保护 | 模型调用 6 次工具 | 第 5 轮后强制结束 |
-| 5.7 | 多工具并行 | 一轮返回 2 个 tool_calls | 两个结果都正确回填 |
-| 5.8 | tool result 保存 | 多轮后查 DB | tool_calls 和 tool_results 完整记录 |
+| 5.3 | 搜索虚拟工具代执行 | `_gateway_web_search` 被调用 | 网关执行搜索，自动回填结果 |
+| 5.4 | 获取虚拟工具代执行 | `_gateway_web_fetch` 被调用 | 网关下载并提取网页，自动回填结果 |
+| 5.5 | 原生工具回弹 | Kimi `$web_search` 被调用 | 自动回弹空 content，Kimi 服务端执行 |
+| 5.6 | 多轮 loop | 模型连续调用 3 次工具 | 每次结果正确回填，最终输出完整 |
+| 5.7 | 循环保护 | 模型调用 6 次工具 | 第 5 轮后强制结束 |
+| 5.8 | 多工具并行 | 一轮返回 search + fetch 两个 tool_calls | 两个结果都正确回填 |
+| 5.9 | tool result 保存 | 多轮后查 DB | tool_calls 和 tool_results 完整记录 |
 
 ---
 
@@ -512,6 +549,34 @@ curl -s localhost:3000/v1/responses \
 # 验证：无 database is locked，依次完成
 ```
 
+### E2E-10：Web Fetch（MinerU）
+```bash
+FETCH_PROVIDER=mineru curl -N localhost:3000/v1/responses \
+  -d '{"model":"deepseek-v4-pro","input":"提取 https://example.com 的内容","stream":true,"tools":[{"type":"web_fetch"}]}'
+# 验证：curl 下载网页，mineru-open-api 提取，返回网页正文
+```
+
+### E2E-11：Web Fetch（Gemini）
+```bash
+FETCH_PROVIDER=gemini curl -N localhost:3000/v1/responses \
+  -d '{"model":"deepseek-v4-pro","input":"提取 https://example.com 的内容","stream":true,"tools":[{"type":"web_fetch"}]}'
+# 验证：调用 Gemini 轻量模型提取网页正文
+```
+
+### E2E-12：Web Fetch（Cloudflare）
+```bash
+FETCH_PROVIDER=cloudflare curl -N localhost:3000/v1/responses \
+  -d '{"model":"deepseek-v4-pro","input":"提取 https://example.com 的内容","stream":true,"tools":[{"type":"web_fetch"}]}'
+# 验证：调用 Cloudflare Workers AI 提取网页正文
+```
+
+### E2E-13：Web Search + Web Fetch 共存
+```bash
+curl -N localhost:3000/v1/responses \
+  -d '{"model":"deepseek-v4-pro","input":"搜索AI新闻并提取第一条链接的详细内容","stream":true,"tools":[{"type":"web_search"},{"type":"web_fetch"}]}'
+# 验证：模型先调用 web_search，再调用 web_fetch 深入阅读，两轮 tool results 正确回填
+```
+
 ---
 
 ## 供应商适配速查表
@@ -525,6 +590,7 @@ curl -s localhost:3000/v1/responses \
 | 多轮回传 | 必须带回 reasoning_content | 必须带回 + `thinking.keep: "all"` | 必须带回 reasoning_details | 必须带回 reasoning_content |
 | 内置搜索 | 无 | `$web_search` 回弹 | 无 | `web_search` 工具 |
 | 搜索+推理 | N/A | 已兼容 (k2.6) | N/A | N/A |
+| 内置网页获取 | 无（网关层 `_gateway_web_fetch`） | 无（网关层 `_gateway_web_fetch`） | 无（网关层 `_gateway_web_fetch`） | 无（网关层 `_gateway_web_fetch`） |
 
 ---
 
@@ -535,3 +601,13 @@ curl -s localhost:3000/v1/responses \
 | **Exa** | `api.exa.ai/search` | 语义搜索，useAutoprompt | 学术/技术内容 |
 | **MiniMax** | `api.minimaxi.com/v1/coding_plan/search` (cn) / `api.minimax.io/v1/coding_plan/search` (sg) | 中文新闻/网页搜索 | 中文内容/国内资讯 |
 | **Gemini Grounding** | Gemini API + `google_search` | 实时性强，返回 groundingMetadata | 实时新闻/天气 |
+
+---
+
+## 网页获取（Fetch）后端速查表
+
+| 后端 | 方式 | 依赖 | 特点 | 适用场景 |
+|---|---|---|---|---|
+| **MinerU** | `mineru-open-api flash-extract/extract` | 本地 CLI | 免 Token（< 10MB），精准提取表格/公式 | 默认首选，本地无额外成本 |
+| **Gemini** | `generateContent` + HTML Prompt | Gemini API Key | 云端处理，无需本地 CLI | 无 MinerU 环境或需远程处理 |
+| **Cloudflare** | Workers AI `run/{model}` | Cloudflare Account ID + API Key | 边缘推理，低延迟 | 已使用 Cloudflare 生态 |

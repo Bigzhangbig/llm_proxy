@@ -1,35 +1,98 @@
 import { Hono } from 'hono'
 import { streamSSE, type SSEStreamingApi } from 'hono/streaming'
 import { randomUUID } from 'crypto'
-import { config } from '../config'
+import { config, type ProviderConfig } from '../config'
 import { appendItems, getConversationItems } from '../db'
 import { inputToMessages, itemsToMessages, buildSaveItems } from '../core/assembler'
 import { injectSchema, tryParseJson } from '../core/schema'
-import { buildDeepSeekRequest, getDeepSeekHeaders, getDeepSeekUrl } from '../providers/deepseek'
+import { resolveProvider, buildProviderRequest, getProviderHeaders, getProviderUrl } from '../providers/router'
+import { buildKimiRequest } from '../providers/kimi'
+import { buildMiniMaxRequest } from '../providers/minimax'
+import { buildMiMoRequest } from '../providers/mimo'
 import { parseSSELines } from '../core/stream'
 import { search } from '../search/router'
+import { fetchPage } from '../fetch/router'
 import type { ResponsesRequest, ResponsesResponse } from '../types'
 
 const MAX_AGENTIC_ROUNDS = Number(Bun.env.MAX_AGENTIC_ROUNDS || '3')
 
+interface GatewayToolCall {
+  id: string
+  type: string
+  function: { name: string; arguments: string }
+}
+
+function isGatewayTool(name: string): boolean {
+  return name === '_gateway_web_search' || name === '_gateway_web_fetch'
+}
+
+function isNativeTool(name: string): boolean {
+  // Kimi $web_search and MiMo web_search are executed server-side by the provider
+  return name === '$web_search' || name === 'web_search'
+}
+
+interface AgenticResult {
+  fullContent: string
+  fullReasoning: string
+  usage: Record<string, unknown> | null
+  toolCalls?: GatewayToolCall[]
+}
+
+async function executeGatewayTool(call: GatewayToolCall): Promise<string> {
+  const args = (() => {
+    try { return JSON.parse(call.function.arguments) as Record<string, unknown> } catch { return {} }
+  })()
+
+  if (call.function.name === '_gateway_web_search') {
+    const query = (args.query as string) || call.function.arguments
+    console.log(`[Gateway] Searching: "${query}"`)
+    const results = await search(query)
+    console.log(`[Gateway] Got ${results.length} search results`)
+    return results.length > 0
+      ? results.map((r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${r.content}`).join('\n\n')
+      : 'No search results found.'
+  }
+
+  if (call.function.name === '_gateway_web_fetch') {
+    const url = (args.url as string) || ''
+    if (!url) return 'Error: No URL provided.'
+    console.log(`[Gateway] Fetching: "${url}"`)
+    try {
+      const result = await fetchPage(url)
+      return `Title: ${result.title}\nURL: ${url}\n---\n${result.content}`
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[Gateway] Fetch failed: ${msg}`)
+      return `Error fetching URL: ${msg}`
+    }
+  }
+
+  return `Error: Unknown gateway tool ${call.function.name}`
+}
+
 async function agenticLoop(
   messages: Array<Record<string, unknown>>,
   providerRequest: Record<string, unknown>,
+  providerConfig: ProviderConfig,
   responseId: string,
+  hasGatewayTools: boolean,
   stream?: SSEStreamingApi,
-): Promise<{ fullContent: string; fullReasoning: string; usage: Record<string, unknown> | null }> {
+): Promise<AgenticResult> {
   let round = 0
   let fullContent = ''
   let fullReasoning = ''
   let lastUsage: Record<string, unknown> | null = null
 
+  const providerUrl = getProviderUrl(providerConfig)
+  const providerHeaders = getProviderHeaders(providerConfig)
+
   while (round < MAX_AGENTIC_ROUNDS) {
     round++
     console.log(`[AgenticLoop] Round ${round}`)
 
-    const resp = await fetch(getDeepSeekUrl(), {
+    const resp = await fetch(providerUrl, {
       method: 'POST',
-      headers: getDeepSeekHeaders(),
+      headers: providerHeaders,
       body: JSON.stringify(providerRequest),
     })
 
@@ -40,53 +103,72 @@ async function agenticLoop(
 
     let content = ''
     let reasoning = ''
-    const toolCalls = new Map<number, { id: string; type: string; function: { name: string; arguments: string } }>()
+    const toolCalls = new Map<number, GatewayToolCall>()
     let usage: Record<string, unknown> | null = null
     let shouldContinue = false
     const isStreaming = providerRequest.stream === true
 
     if (!isStreaming) {
-      // Non-streaming: parse raw JSON response
-      const data = await resp.json() as any
-      const choice = data.choices?.[0]
-      const msg = choice?.message
+      const data = await resp.json() as Record<string, unknown>
+      const choice = (data.choices as Array<Record<string, unknown>>)?.[0]
+      const msg = choice?.message as Record<string, unknown> | undefined
       if (msg) {
-        content = msg.content || ''
-        reasoning = msg.reasoning_content || ''
-        if (msg.tool_calls) {
-          for (const tc of msg.tool_calls) {
-            toolCalls.set(tc.index, {
-              id: tc.id || '',
+        content = (msg.content as string) || ''
+        reasoning = (msg.reasoning_content as string) || ''
+        const rawToolCalls = msg.tool_calls as Array<Record<string, unknown>> | undefined
+        if (rawToolCalls) {
+          for (const tc of rawToolCalls) {
+            const fn = tc.function as Record<string, unknown> | undefined
+            toolCalls.set(tc.index as number, {
+              id: (tc.id as string) || '',
               type: 'function',
-              function: { name: tc.function?.name || '', arguments: tc.function?.arguments || '' },
+              function: { name: (fn?.name as string) || '', arguments: (fn?.arguments as string) || '' },
             })
           }
         }
       }
-      if (data.usage) usage = data.usage
-      const finishReason = choice?.finish_reason
+      if (data.usage) usage = data.usage as Record<string, unknown>
+      const finishReason = choice?.finish_reason as string | undefined
       console.log(`[AgenticLoop] Round ${round}: finish_reason=${finishReason}, tool_calls=${toolCalls.size}`)
 
       if (finishReason === 'tool_calls') {
         const allToolCalls = Array.from(toolCalls.values())
-        const searchCall = allToolCalls.find((tc) => tc.function.name === '_gateway_web_search')
-        if (searchCall) {
-          let searchQuery = ''
-          try {
-            const args = JSON.parse(searchCall.function.arguments) as { query?: string }
-            searchQuery = args.query || ''
-          } catch { searchQuery = searchCall.function.arguments }
-          console.log(`[AgenticLoop] Round ${round}: searching "${searchQuery}"`)
-          const results = await search(searchQuery)
-          console.log(`[AgenticLoop] Got ${results.length} search results`)
-          const searchContext = results.map((r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${r.content}`).join('\n\n')
+        const gatewayCalls = allToolCalls.filter((tc) => isGatewayTool(tc.function.name))
+        const nativeCalls = allToolCalls.filter((tc) => isNativeTool(tc.function.name))
+        const functionCalls = allToolCalls.filter((tc) => !isGatewayTool(tc.function.name) && !isNativeTool(tc.function.name))
+
+        // Execute gateway tools in parallel
+        if (gatewayCalls.length > 0) {
+          const results = await Promise.all(gatewayCalls.map((tc) => executeGatewayTool(tc)))
           messages.push({ role: 'assistant', content: content || null, reasoning_content: reasoning || null, tool_calls: allToolCalls })
-          messages.push({ role: 'tool', tool_call_id: searchCall.id, content: searchContext || 'No search results found.' })
+          for (let i = 0; i < gatewayCalls.length; i++) {
+            messages.push({ role: 'tool', tool_call_id: gatewayCalls[i].id, content: results[i] })
+          }
           shouldContinue = true
+        }
+
+        // Bounce native tools (Kimi $web_search, MiMo web_search)
+        if (nativeCalls.length > 0) {
+          console.log(`[AgenticLoop] Bouncing ${nativeCalls.length} native tool(s)`)
+          messages.push({ role: 'assistant', content: content || null, reasoning_content: reasoning || null, tool_calls: allToolCalls })
+          for (const tc of nativeCalls) {
+            messages.push({ role: 'tool', tool_call_id: tc.id, content: '' })
+          }
+          shouldContinue = true
+        }
+
+        // Function tools: return to client
+        if (functionCalls.length > 0) {
+          console.log(`[AgenticLoop] Returning ${functionCalls.length} function tool(s) to client`)
+          return {
+            fullContent: content,
+            fullReasoning: reasoning,
+            usage,
+            toolCalls: functionCalls,
+          }
         }
       }
     } else {
-      // Streaming: parse SSE chunks
       const reader = resp.body!.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
@@ -142,22 +224,46 @@ async function agenticLoop(
 
           if (finishReason === 'tool_calls') {
             const allToolCalls = Array.from(toolCalls.values())
-            const searchCall = allToolCalls.find((tc) => tc.function.name === '_gateway_web_search')
-            if (searchCall) {
-              let searchQuery = ''
-              try {
-                const args = JSON.parse(searchCall.function.arguments) as { query?: string }
-                searchQuery = args.query || ''
-              } catch { searchQuery = searchCall.function.arguments }
-              console.log(`[AgenticLoop] Round ${round}: searching "${searchQuery}"`)
-              const results = await search(searchQuery)
-              console.log(`[AgenticLoop] Got ${results.length} search results`)
-              const searchContext = results.map((r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${r.content}`).join('\n\n')
+            const gatewayCalls = allToolCalls.filter((tc) => isGatewayTool(tc.function.name))
+            const nativeCalls = allToolCalls.filter((tc) => isNativeTool(tc.function.name))
+            const functionCalls = allToolCalls.filter((tc) => !isGatewayTool(tc.function.name) && !isNativeTool(tc.function.name))
+
+            // Execute gateway tools
+            if (gatewayCalls.length > 0) {
+              const results = await Promise.all(gatewayCalls.map((tc) => executeGatewayTool(tc)))
               messages.push({ role: 'assistant', content: content || null, reasoning_content: reasoning || null, tool_calls: allToolCalls })
-              messages.push({ role: 'tool', tool_call_id: searchCall.id, content: searchContext || 'No search results found.' })
+              for (let i = 0; i < gatewayCalls.length; i++) {
+                messages.push({ role: 'tool', tool_call_id: gatewayCalls[i].id, content: results[i] })
+              }
               shouldContinue = true
-              break
             }
+
+            // Bounce native tools
+            if (nativeCalls.length > 0) {
+              console.log(`[AgenticLoop] Bouncing ${nativeCalls.length} native tool(s)`)
+              messages.push({ role: 'assistant', content: content || null, reasoning_content: reasoning || null, tool_calls: allToolCalls })
+              for (const tc of nativeCalls) {
+                messages.push({ role: 'tool', tool_call_id: tc.id, content: '' })
+              }
+              shouldContinue = true
+            }
+
+            // Function tools: emit tool_call events and return
+            if (functionCalls.length > 0 && stream) {
+              console.log(`[AgenticLoop] Emitting ${functionCalls.length} function tool(s) to client`)
+              // Finalize current message if any
+              if (messageSent) {
+                await stream.writeSSE({ event: 'response.output_item.done', data: JSON.stringify({ type: 'response.output_item.done', response_id: responseId, output_index: reasoningSent ? 1 : 0, item: { type: 'message', id: `msg_${responseId}`, status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: content }] } }) })
+              }
+              // Emit function tool calls
+              for (const tc of functionCalls) {
+                await stream.writeSSE({ event: 'response.output_item.added', data: JSON.stringify({ type: 'response.output_item.added', response_id: responseId, output_index: reasoningSent ? 2 : 1, item: { type: 'function_call', id: tc.id, name: tc.function.name, arguments: tc.function.arguments, status: 'in_progress' } }) })
+                await stream.writeSSE({ event: 'response.output_item.done', data: JSON.stringify({ type: 'response.output_item.done', response_id: responseId, output_index: reasoningSent ? 2 : 1, item: { type: 'function_call', id: tc.id, name: tc.function.name, arguments: tc.function.arguments, status: 'completed' } }) })
+              }
+              return { fullContent: content, fullReasoning: reasoning, usage, toolCalls: functionCalls }
+            }
+
+            if (shouldContinue) break
           }
         }
         if (shouldContinue) break
@@ -176,19 +282,19 @@ async function agenticLoop(
   if (!fullContent && messages.length > 0) {
     console.log(`[AgenticLoop] Forcing final response (no tools)`)
     const finalRequest = { ...providerRequest, tools: undefined, stream: false }
-    const resp = await fetch(getDeepSeekUrl(), {
+    const resp = await fetch(providerUrl, {
       method: 'POST',
-      headers: getDeepSeekHeaders(),
+      headers: providerHeaders,
       body: JSON.stringify(finalRequest),
     })
     if (resp.ok) {
-      const data = await resp.json() as any
-      const msg = data.choices?.[0]?.message
+      const data = await resp.json() as Record<string, unknown>
+      const msg = (data.choices as Array<Record<string, unknown>>)?.[0]?.message as Record<string, unknown> | undefined
       if (msg) {
-        fullContent = msg.content || ''
-        fullReasoning = msg.reasoning_content || ''
+        fullContent = (msg.content as string) || ''
+        fullReasoning = (msg.reasoning_content as string) || ''
       }
-      if (data.usage) lastUsage = data.usage
+      if (data.usage) lastUsage = data.usage as Record<string, unknown>
     }
   }
 
@@ -220,21 +326,44 @@ responsesRouter.post('/responses', async (c) => {
     messages = injectSchema(messages, body.text.format.schema)
   }
 
-  const providerRequest = buildDeepSeekRequest(messages, {
+  // Resolve provider from model name
+  const { name: providerName, config: providerConfig } = resolveProvider(body.model)
+  console.log(`[Responses] model=${body.model} provider=${providerName}`)
+
+  // Build provider-specific request
+  const requestOptions = {
     stream: body.stream,
     tools: body.tools,
     tool_choice: body.tool_choice,
     temperature: body.temperature,
     max_tokens: body.max_tokens,
-  })
+  }
 
-  // Web search tool injection
-  const hasSearchTool = body.tools?.some((t: { type?: string }) => t.type === 'web_search')
+  let providerRequest: Record<string, unknown>
+  switch (providerName) {
+    case 'kimi':
+      providerRequest = buildKimiRequest(providerConfig, messages, requestOptions)
+      break
+    case 'minimax':
+      providerRequest = buildMiniMaxRequest(providerConfig, messages, requestOptions)
+      break
+    case 'mimo':
+      providerRequest = buildMiMoRequest(providerConfig, messages, requestOptions)
+      break
+    default:
+      providerRequest = buildProviderRequest(providerConfig, messages, requestOptions)
+  }
 
-  if (hasSearchTool) {
-    providerRequest.tools = [
-      ...(providerRequest.tools || []).filter((t: { type?: string }) => t.type !== 'web_search'),
-      {
+  // Gateway tool injection: replace web_search and web_fetch with virtual functions
+  const hasSearchTool = body.tools?.some((t: { type?: string }) => t.type === 'web_search') ?? false
+  const hasFetchTool = body.tools?.some((t: { type?: string }) => t.type === 'web_fetch') ?? false
+  const hasGatewayTools = hasSearchTool || hasFetchTool
+
+  if (hasGatewayTools) {
+    const gatewayTools: Array<Record<string, unknown>> = []
+
+    if (hasSearchTool) {
+      gatewayTools.push({
         type: 'function',
         function: {
           name: '_gateway_web_search',
@@ -247,7 +376,29 @@ responsesRouter.post('/responses', async (c) => {
             required: ['query'],
           },
         },
-      },
+      })
+    }
+
+    if (hasFetchTool) {
+      gatewayTools.push({
+        type: 'function',
+        function: {
+          name: '_gateway_web_fetch',
+          description: 'Fetch and extract content from a URL',
+          parameters: {
+            type: 'object',
+            properties: {
+              url: { type: 'string', description: 'The URL to fetch' },
+            },
+            required: ['url'],
+          },
+        },
+      })
+    }
+
+    providerRequest.tools = [
+      ...(providerRequest.tools || []).filter((t: { type?: string }) => t.type !== 'web_search' && t.type !== 'web_fetch'),
+      ...gatewayTools,
     ]
   }
 
@@ -255,26 +406,44 @@ responsesRouter.post('/responses', async (c) => {
   if (!body.stream) {
     try {
       // Use agentic loop when web search tools are present
-      if (hasSearchTool) {
-        const result = await agenticLoop(messages, providerRequest, responseId)
+      if (hasGatewayTools) {
+        const result = await agenticLoop(messages, providerRequest, providerConfig, responseId, hasGatewayTools)
         let outputParsed = null
         if (body.text?.format?.type === 'json_schema' && result.fullContent) {
           const { parsed } = tryParseJson(result.fullContent)
           outputParsed = parsed
         }
+
+        // Build output items
+        const output: Array<Record<string, unknown>> = []
+        if (result.fullContent) {
+          output.push({
+            type: 'message',
+            id: `msg_${randomUUID().slice(0, 12)}`,
+            role: 'assistant',
+            content: [{ type: 'output_text', text: result.fullContent }],
+            status: 'completed',
+          })
+        }
+        // Add function_call output items for client-side tools
+        if (result.toolCalls) {
+          for (const tc of result.toolCalls) {
+            output.push({
+              type: 'function_call',
+              id: tc.id,
+              name: tc.function.name,
+              arguments: tc.function.arguments,
+              status: 'completed',
+            })
+          }
+        }
+
         const response: ResponsesResponse = {
           id: responseId,
           object: 'response',
+          conversation_id: conversationId,
           status: 'completed',
-          output: result.fullContent
-            ? [{
-                type: 'message',
-                id: `msg_${randomUUID().slice(0, 12)}`,
-                role: 'assistant',
-                content: [{ type: 'output_text', text: result.fullContent }],
-                status: 'completed',
-              }]
-            : [],
+          output,
           usage: result.usage
             ? {
                 input_tokens: Number(result.usage.prompt_tokens) || 0,
@@ -297,9 +466,9 @@ responsesRouter.post('/responses', async (c) => {
       }
 
       // Standard non-streaming path
-      const resp = await fetch(getDeepSeekUrl(), {
+      const resp = await fetch(getProviderUrl(providerConfig), {
         method: 'POST',
-        headers: getDeepSeekHeaders(),
+        headers: getProviderHeaders(providerConfig),
         body: JSON.stringify(providerRequest),
       })
       if (!resp.ok) {
@@ -315,6 +484,7 @@ responsesRouter.post('/responses', async (c) => {
       const response: ResponsesResponse = {
         id: responseId,
         object: 'response',
+        conversation_id: conversationId,
         status: 'completed',
         output: msg
           ? [{
@@ -353,16 +523,16 @@ responsesRouter.post('/responses', async (c) => {
   // Streaming
   try {
     // Use agentic loop when web search tools are present
-    if (hasSearchTool) {
+    if (hasGatewayTools) {
       return streamSSE(c, async (stream) => {
         let aborted = false
         stream.onAbort(() => { aborted = true })
 
         try {
-          const result = await agenticLoop(messages, providerRequest, responseId, stream)
+          const result = await agenticLoop(messages, providerRequest, providerConfig, responseId, hasGatewayTools, stream)
 
-          // Finalize: message done
-          if (result.fullContent || result.fullReasoning) {
+          // Finalize: message done (skip if tool calls were returned — already emitted)
+          if (!result.toolCalls && (result.fullContent || result.fullReasoning)) {
             await stream.writeSSE({
               event: 'response.output_item.done',
               data: JSON.stringify({
@@ -399,8 +569,8 @@ responsesRouter.post('/responses', async (c) => {
             }),
           })
 
-          // Save to DB
-          if (result.fullContent || result.fullReasoning) {
+          // Save to DB (only when we have text output, not tool calls)
+          if (!result.toolCalls && (result.fullContent || result.fullReasoning)) {
             appendItems(conversationId, buildSaveItems(
               conversationId,
               typeof body.input === 'string' ? body.input : JSON.stringify(body.input),
@@ -423,9 +593,9 @@ responsesRouter.post('/responses', async (c) => {
       let aborted = false
       stream.onAbort(() => { aborted = true })
 
-      const upstreamResp = await fetch(getDeepSeekUrl(), {
+      const upstreamResp = await fetch(getProviderUrl(providerConfig), {
         method: 'POST',
-        headers: getDeepSeekHeaders(),
+        headers: getProviderHeaders(providerConfig),
         body: JSON.stringify(providerRequest),
       })
       if (!upstreamResp.ok) {

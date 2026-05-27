@@ -33,7 +33,7 @@ describe('inputToMessages', () => {
     expect(result).toEqual([{ role: 'user', content: 'Follow up' }])
   })
 
-  it('handles multimodal content parts by extracting text', () => {
+  it('converts multimodal content parts to Chat Completions format', () => {
     const input = [
       {
         role: 'user',
@@ -44,10 +44,16 @@ describe('inputToMessages', () => {
       },
     ]
     const result = inputToMessages(input)
-    expect(result).toEqual([{ role: 'user', content: 'Describe this image' }])
+    expect(result).toEqual([{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Describe this image' },
+        { type: 'image_url', image_url: { url: 'https://example.com/img.png' } },
+      ],
+    }])
   })
 
-  it('returns placeholder when multimodal has no text parts', () => {
+  it('converts image-only input to Chat Completions format', () => {
     const input = [
       {
         role: 'user',
@@ -57,7 +63,25 @@ describe('inputToMessages', () => {
       },
     ]
     const result = inputToMessages(input)
-    expect(result).toEqual([{ role: 'user', content: '[multimodal content]' }])
+    expect(result).toEqual([{
+      role: 'user',
+      content: [
+        { type: 'image_url', image_url: { url: 'https://example.com/img.png' } },
+      ],
+    }])
+  })
+
+  it('collapses single text part to plain string', () => {
+    const input = [
+      {
+        role: 'user',
+        content: [
+          { type: 'input_text', text: 'Hello' },
+        ],
+      },
+    ]
+    const result = inputToMessages(input)
+    expect(result).toEqual([{ role: 'user', content: 'Hello' }])
   })
 })
 
